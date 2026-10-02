@@ -32,6 +32,7 @@ export interface TestCase {
   expectedErrorSubstrings?: string[];
   expectedErrorLines?: number[];
   expectedDiagnostics?: ExpectedDiagnostic[];
+  expectedHover?: { line: number; col: number; contains: string | string[] };
   expectEvalResult?: (res: any) => boolean;
 }
 
@@ -334,6 +335,196 @@ println(to_string(len(doubleScore)))
 `,
     expectedTypeErrors: 0,
     expectedStdoutSubstrings: ['1']
+  },
+  {
+    id: 'test_lsp_keyword_hover',
+    name: 'LSP Keyword Hover Syntax Highlighting',
+    category: 'Language Server',
+    description: 'Keeps keyword hover prose intact while exposing the keyword as a TypeLang code snippet.',
+    code: `let score = 95
+`,
+    expectedTypeErrors: 0,
+    expectedHover: {
+      line: 1,
+      col: 2,
+      contains: [
+        '**TypeLang Keyword**',
+        '```typelang\nlet\n```',
+        'Binds an immutable value or variable.'
+      ]
+    }
+  },
+  {
+    id: 'test_lsp_function_doc_comment',
+    name: 'LSP Function Documentation Comments',
+    category: 'Language Server',
+    description: 'Shows summaries, parameter and return docs, examples, and deprecation notes in function hover.',
+    code: `/// Adds two numbers and returns their sum.
+/// Works with positive and negative values.
+/// @param left - The first value.
+/// @param right The second value.
+/// @returns The arithmetic sum.
+/// @example
+/// add(2, 3)
+/// @deprecated Prefer add_checked for untrusted input.
+function add(left: number, right: number): number { left + right }
+`,
+    expectedTypeErrors: 0,
+    expectedHover: {
+      line: 9,
+      col: 11,
+      contains: [
+        'Adds two numbers and returns their sum.\nWorks with positive and negative values.',
+        '- `left`: The first value.',
+        '- `right`: The second value.',
+        '**Returns**\nThe arithmetic sum.',
+        '**Example**',
+        '**Deprecated.** Prefer add_checked for untrusted input.'
+      ]
+    }
+  },
+  {
+    id: 'test_lsp_parameter_doc_comment',
+    name: 'LSP Parameter Documentation Comments',
+    category: 'Language Server',
+    description: 'Reads JSDoc-style blocks and presents @param details when hovering a parameter.',
+    code: `/**
+ * Returns the supplied text unchanged.
+ * @param {string} value - Text to return to the caller.
+ * @returns The original text.
+ */
+function identity(value: string): string { value }
+`,
+    expectedTypeErrors: 0,
+    expectedHover: { line: 6, col: 21, contains: 'Text to return to the caller.' }
+  },
+  {
+    id: 'test_lsp_stdlib_module_member_docs',
+    name: 'LSP Standard Library Module Member Documentation',
+    category: 'Language Server',
+    description: 'Uses curated standard-library documentation for qualified module member hovers.',
+    code: `let doubled = Array.map([1, 2], fn(value) { value * 2 })
+`,
+    expectedTypeErrors: 0,
+    expectedHover: {
+      line: 1,
+      col: 22,
+      contains: [
+        'Creates a new array by applying fn to every element.',
+        '**Parameters**',
+        '- `arr`: The input array or collection.',
+        '- `fn`: The callback applied to the input value.',
+        '**Returns**',
+        '**Example**'
+      ]
+    }
+  },
+  {
+    id: 'test_lsp_stdlib_imported_member_docs',
+    name: 'LSP Imported Standard Library Member Documentation',
+    category: 'Language Server',
+    description: 'Preserves standard-library docs when a module member is selectively imported.',
+    code: `import Math.{ sqrt }
+let root = sqrt(81)
+`,
+    expectedTypeErrors: 0,
+    expectedHover: { line: 2, col: 13, contains: 'square root' }
+  },
+  {
+    id: 'test_lsp_stdlib_root_builtin_docs',
+    name: 'LSP Root Standard Library Documentation',
+    category: 'Language Server',
+    description: 'Shows parsed documentation comments for global built-in functions.',
+    code: `println(to_string(42))
+`,
+    expectedTypeErrors: 0,
+    expectedHover: { line: 1, col: 3, contains: 'followed by a newline' }
+  },
+  {
+    id: 'test_lsp_module_export_count',
+    name: 'LSP Module Hover Uses Explicit Exports',
+    category: 'Language Server',
+    description: 'Ensures module hover counts only declared exports, not inherited scope bindings.',
+    code: `module PublicApi {
+  let internalValue = 1
+  export let visibleValue = 2
+}
+
+import PublicApi as Api
+println(Api.visibleValue)
+`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['2'],
+    expectedHover: { line: 6, col: 21, contains: '1 exported member(s)' }
+  },
+  {
+    id: 'test_lsp_gadt_constructor_doc_comment',
+    name: 'LSP GADT Constructor Documentation Comments',
+    category: 'Language Server',
+    description: 'Shows documentation attached to individual GADT constructors and their parameters.',
+    code: `type Result =
+  /// A successful computation.
+  /// @param value The produced value.
+  | Ok(value: string): Result
+  | Err(message: string): Result
+let result = Ok("done")
+`,
+    expectedTypeErrors: 0,
+    expectedHover: { line: 4, col: 6, contains: 'The produced value.' }
+  },
+  {
+    id: 'test_lsp_structural_type_hover',
+    name: 'LSP Hover Pretty-Prints Structural Types',
+    category: 'Language Server',
+    description: 'Ensures record hover types use readable multiline fields and concise self-method signatures.',
+    code: `let user = {
+  name: "Ada",
+  age: 36,
+  mut score: 10,
+  celebrate(self): void { self.score += 1 },
+  summary(self): string { concat(self.name, " the builder") }
+}
+user.celebrate()
+println(user.summary())
+`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['Ada the builder'],
+    expectedHover: { line: 1, col: 5, contains: '  celebrate(): void,' }
+  },
+  {
+    id: 'test_lsp_gadt_constructor_hover',
+    name: 'LSP GADT Hover Lists Constructor Signatures',
+    category: 'Language Server',
+    description: 'Ensures hovering a GADT type shows every constructor and its parameter/result types.',
+    code: `type Shape =
+  | Circle(radius: number): Shape
+  | Rectangle(width: number, height: number): Shape
+  | Dot: Shape
+
+let example = Circle(12)
+`,
+    expectedTypeErrors: 0,
+    expectedHover: {
+      line: 1,
+      col: 6,
+      contains: '**Constructors**\n\n```typelang\n  Circle(radius: number): Shape\n  Rectangle(width: number, height: number): Shape\n  Dot: Shape\n```'
+    }
+  },
+  {
+    id: 'test_lsp_generic_gadt_constructor_hover',
+    name: 'LSP Generic GADT Hover Colors Constructor Signatures',
+    category: 'Language Server',
+    description: 'Ensures generic GADT constructors are returned as TypeLang-highlightable code, not gray inline code.',
+    code: `type OptionBox<T> =
+  | Box(value: T): OptionBox<T>
+  | Empty: OptionBox<T>
+`,
+    expectedTypeErrors: 0,
+    expectedHover: {
+      line: 1,
+      col: 6,
+      contains: '**Constructors**\n\n```typelang\n  Box(value: T): OptionBox<T>\n  Empty: OptionBox<T>\n```'
+    }
   },
   {
     id: 'test_stage1_lexer',
@@ -2416,6 +2607,10 @@ export function runCompilerTestSuite(): TestResult[] {
         // Formatter roundtrip
         try {
           const formatted = formatTypeLangCode(test.code);
+          if ((test.code.includes('///') || test.code.includes('/**')) && !formatted.includes('///')) {
+            passed = false;
+            failureReason = 'Formatter removed documentation comments during roundtrip.';
+          }
           const fLexer = new Lexer(formatted);
           const fAst = new Parser(fLexer.tokenize()).parseProgram();
           const fChecker = new TypeChecker();
@@ -2434,6 +2629,18 @@ export function runCompilerTestSuite(): TestResult[] {
         if (passed) {
           try {
             getHoverInformation(test.code, 1, 2);
+            if (test.expectedHover) {
+              const hover = getHoverInformation(test.code, test.expectedHover.line, test.expectedHover.col);
+              const hoverText = hover?.contents.join('\n') || '';
+              const expectedContents = Array.isArray(test.expectedHover.contains)
+                ? test.expectedHover.contains
+                : [test.expectedHover.contains];
+              const missingContents = expectedContents.filter(expected => !hoverText.includes(expected));
+              if (missingContents.length > 0) {
+                passed = false;
+                failureReason = `Expected hover at ${test.expectedHover.line}:${test.expectedHover.col} to contain ${missingContents.map(item => `"${item}"`).join(', ')}, but got:\n${hoverText || '(no hover result)'}`;
+              }
+            }
           } catch (lspErr: any) {
             passed = false;
             failureReason = `LSP hover lookup threw exception: ${lspErr.message}`;

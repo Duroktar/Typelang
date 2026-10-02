@@ -11,6 +11,7 @@ import {
   SModule,
   typeParamToString
 } from './ast';
+import { formatDocComment } from './docComments';
 
 /**
  * TypeLang Code Prettifier & AST Formatter
@@ -49,7 +50,10 @@ export class Formatter {
         const mutStr = stmt.isMut ? 'mut ' : '';
         const typeStr = stmt.typeAnnotation ? `: ${this.formatType(stmt.typeAnnotation)}` : '';
         const initStr = this.formatExpr(stmt.init);
-        return `${this.indent()}let ${mutStr}${stmt.name}${typeStr} = ${initStr}`;
+        const docPrefix = stmt.docComment
+          ? `${formatDocComment(stmt.docComment).split('\n').map(line => `${this.indent()}${line}`).join('\n')}\n`
+          : '';
+        return `${docPrefix}${this.indent()}let ${mutStr}${stmt.name}${typeStr} = ${initStr}`;
       }
 
       case 's_function': {
@@ -79,17 +83,20 @@ export class Formatter {
           whereClause = ` where {\n${whereStmts}\n${this.indent()}}`;
         }
 
-        return `${this.indent()}${exportPrefix}function ${stmt.name}${typeParams}(${params})${retType} {\n${bodyLines}\n${this.indent()}}${whereClause}`;
+        const docPrefix = stmt.docComment
+          ? `${formatDocComment(stmt.docComment).split('\n').map(line => `${this.indent()}${line}`).join('\n')}\n`
+          : '';
+        return `${docPrefix}${this.indent()}${exportPrefix}function ${stmt.name}${typeParams}(${params})${retType} {\n${bodyLines}\n${this.indent()}}${whereClause}`;
       }
 
       case 's_expr':
         return `${this.indent()}${this.formatExpr(stmt.expr)}`;
 
       case 's_type_alias':
-        return this.formatTypeAlias(stmt.decl);
+        return this.formatDocPrefix(stmt.decl.docComment) + this.formatTypeAlias(stmt.decl);
 
       case 's_gadt':
-        return this.formatGadt(stmt.decl);
+        return this.formatDocPrefix(stmt.decl.docComment) + this.formatGadt(stmt.decl);
 
       case 's_module':
         return this.formatModule(stmt);
@@ -128,6 +135,12 @@ export class Formatter {
     return `${this.indent()}type ${decl.name}${typeParams} = ${body}`;
   }
 
+  private formatDocPrefix(raw?: string): string {
+    return raw
+      ? `${formatDocComment(raw).split('\n').map(line => `${this.indent()}${line}`).join('\n')}\n`
+      : '';
+  }
+
   private formatGadt(gadt: GADTDecl): string {
     const typeParams = gadt.typeParams && gadt.typeParams.length > 0 ? `<${gadt.typeParams.map(tp => typeParamToString(tp)).join(', ')}>` : '';
     this.indentLevel++;
@@ -136,7 +149,7 @@ export class Formatter {
         const cTypeParams = c.typeParams && c.typeParams.length > 0 ? `<${c.typeParams.map(tp => typeParamToString(tp)).join(', ')}>` : '';
         const params = c.params.length > 0 ? `(${c.params.map(p => `${p.name}: ${this.formatType(p.type)}`).join(', ')})` : '';
         const retType = c.returnType ? `: ${this.formatType(c.returnType)}` : '';
-        return `${this.indent()}| ${c.name}${cTypeParams}${params}${retType}`;
+        return `${this.formatDocPrefix(c.docComment)}${this.indent()}| ${c.name}${cTypeParams}${params}${retType}`;
       })
       .join('\n');
     this.indentLevel--;

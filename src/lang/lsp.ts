@@ -1,8 +1,8 @@
 import { Lexer } from './lexer';
 import { Parser } from './parser';
 import { TypeChecker, TypeEnv, ScopeSymbol } from './checker';
-import { typeToString, Type, TFun, TRec, TPoly, TCons, kindToString, prune } from './types';
-import { typeParamToString } from './ast';
+import { typeToString, Type, TFun, TRec, TPoly, TCons, kindArity, prune } from './types';
+import { GADTConstructor, getTypeParamName, TypeParam, typeParamToString } from './ast';
 import { Formatter } from './formatter';
 
 export interface HoverResult {
@@ -27,6 +27,66 @@ export interface TypeInspectionResult {
     typeParams?: string[];
     moduleExports?: { name: string; type: string }[];
   };
+}
+
+function formatHoverType(type: Type, indent = 0, visiting = new Set<Type>()): string {
+  const resolved = prune(type);
+  if (visiting.has(resolved)) return 'Self';
+  visiting.add(resolved);
+  const format = (nested: Type) => formatHoverType(nested, indent + 1, visiting);
+  let result: string;
+  switch (resolved.kind) {
+    case 'prim': result = resolved.name; break;
+    case 'var': result = resolved.instance ? format(resolved.instance) : resolved.name || `'t${resolved.id}`; break;
+    case 'existential': result = `∃${resolved.name}_${resolved.id}`; break;
+    case 'poly': {
+      const quantifiers = resolved.quantifiers.map(name => {
+        const kind = resolved.quantifierKinds?.get(name);
+        return kind?.kind === 'arrow' ? `${name}<${Array(kindArity(kind)).fill('_').join(', ')}>` : name;
+      });
+      result = `<${quantifiers.join(', ')}>${format(resolved.type)}`;
+      break;
+    }
+    case 'fun': {
+      const params = resolved.params.map(param => param.name ? `${param.name}: ${format(param.type)}` : format(param.type));
+      result = `(${params.join(', ')}) => ${format(resolved.returnType)}`;
+      break;
+    }
+    case 'rec': {
+      const fieldIndent = '  '.repeat(indent + 1);
+      const fields = resolved.fields.map((field, index) => {
+        const fieldType = prune(field.type);
+        const isSelfMethod = fieldType.kind === 'fun' && fieldType.params[0]?.name === 'self' && prune(fieldType.params[0].type) === resolved;
+        const typeText = isSelfMethod
+          ? `${fieldType.params.slice(1).map(param => param.name ? `${param.name}: ${format(param.type)}` : format(param.type)).join(', ')}): ${format(fieldType.returnType)}`
+          : format(field.type);
+        const fieldName = `${field.isMut ? 'mut ' : ''}${field.name}${field.isOptional ? '?' : ''}`;
+        const rendered = isSelfMethod ? `${fieldName}(${typeText}` : `${fieldName}: ${typeText}`;
+        return `${fieldIndent}${rendered}${index < resolved.fields.length - 1 ? ',' : ''}`;
+      });
+      result = ` {\n${fields.join('\n')}\n${'  '.repeat(indent)}}`;
+      break;
+    }
+    case 'tup': result = `[${resolved.elements.map(format).join(', ')}]`; break;
+    case 'cons': result = resolved.args.length ? `${resolved.name}<${resolved.args.map(format).join(', ')}>` : resolved.name; break;
+    case 'hkt_app': result = `${format(resolved.constructor)}<${resolved.args.map(format).join(', ')}>`; break;
+    case 'type_lambda': result = `λ<${resolved.params.join(', ')}> => ${format(resolved.body)}`; break;
+  }
+  visiting.delete(resolved);
+  return result;
+}
+
+function appendGadtHover(contents: string[], gadt: { name: string; typeParams: TypeParam[]; constructors: GADTConstructor[] }): void {
+  const typeParams = gadt.typeParams.length ? `<${gadt.typeParams.map(typeParamToString).join(', ')}>` : '';
+  const genericArgs = gadt.typeParams.length ? `<${gadt.typeParams.map(getTypeParamName).join(', ')}>` : '';
+  contents.push(`\`\`\`typelang\ntype ${gadt.name}${typeParams}\n\`\`\``);
+  contents.push(`**Constructors**\n\n\`\`\`typelang\n${gadt.constructors.map(ctor => {
+    const ctorTypeParams = ctor.typeParams.length ? `<${ctor.typeParams.map(typeParamToString).join(', ')}>` : '';
+    const params = ctor.params.map(param => `${param.name}: ${Formatter.formatTypeAST(param.type)}`).join(', ');
+    const args = params ? `(${params})` : '';
+    const result = ctor.returnType ? Formatter.formatTypeAST(ctor.returnType) : `${gadt.name}${genericArgs}`;
+    return `  ${ctor.name}${ctorTypeParams}${args}: ${result}`;
+  }).join('\n')}\n\`\`\``);
 }
 
 /**
@@ -560,19 +620,11 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
 
   const contents: string[] = [];
 
-  // 1. Check Standard Library Built-ins
-  if (BUILTIN_HOVER_DB[word]) {
-    const builtin = BUILTIN_HOVER_DB[word];
-    contents.push('```typelang\n' + builtin.signature + '\n```');
-    contents.push('*Standard Library Function*');
-    contents.push(builtin.doc);
-    return { contents, word };
-  }
-
-  // 2. Check Keywords
+  // 1. Check Keywords
   if (KEYWORD_HOVER_DB[word]) {
     const kw = KEYWORD_HOVER_DB[word];
-    contents.push(`**${kw.title}**`);
+    contents.push('**TypeLang Keyword**');
+    contents.push(`\`\`\`typelang\n${word}\n\`\`\``);
     contents.push(kw.doc);
     return { contents, word };
   }
@@ -586,10 +638,28 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
     const checker = new TypeChecker();
     const env = checker.checkProgram(ast);
 
+    const sourceLine = code.split('\n')[line - 1] || '';
+    const qualifier = sourceLine.slice(0, Math.max(0, col - 1))
+      .match(/([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:[A-Za-z_][A-Za-z0-9_]*)?$/)?.[1];
+    if (qualifier) {
+      const moduleEnv = env.modules.get(qualifier);
+      const memberType = moduleEnv?.vars.get(word);
+      if (moduleEnv && memberType) {
+        contents.push(`\`\`\`typelang\n${qualifier}.${word}: ${typeToString(memberType)}\n\`\`\``);
+        contents.push(moduleEnv.docs?.get(word) || moduleEnv.moduleDoc || `Member of the \`${qualifier}\` standard library module.`);
+        return { contents, word };
+      }
+    }
+
     // Search in registered scoped symbols (function parameters, local variables, lambdas, patterns, etc.)
     const matchedSymbol = findMatchingSymbol(checker.symbols, word, line, col);
     if (matchedSymbol) {
-      const typeStr = typeToString(matchedSymbol.type);
+      if (matchedSymbol.kind === 'gadt' && env.gadts.has(word)) {
+        appendGadtHover(contents, env.gadts.get(word)!);
+        if (matchedSymbol.doc) contents.push(matchedSymbol.doc);
+        return { contents, word };
+      }
+      const typeStr = formatHoverType(matchedSymbol.type);
       if (matchedSymbol.kind === 'parameter') {
         const container = matchedSymbol.containerName ? ` of \`${matchedSymbol.containerName}\`` : '';
         contents.push('```typelang\n(parameter) ' + word + ': ' + typeStr + '\n```');
@@ -620,9 +690,10 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
     // Search in root environment variables
     if (env.vars.has(word)) {
       const type = env.vars.get(word)!;
-      const typeStr = typeToString(type);
+      const typeStr = formatHoverType(type);
       contents.push('```typelang\nlet ' + word + ': ' + typeStr + '\n```');
       contents.push('*Inferred symbol type in global scope*');
+      if (env.docs?.has(word)) contents.push(env.docs.get(word)!);
       return { contents, word };
     }
 
@@ -663,7 +734,8 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
     if (env.modules.has(word)) {
       const mod = env.modules.get(word)!;
       contents.push('```typelang\nmodule ' + word + '\n```');
-      contents.push(`**Module Scope** containing ${mod.vars.size} exported variable(s).`);
+      contents.push(`**Module Scope** containing ${mod.exports.size} exported member(s).`);
+      if (mod.moduleDoc) contents.push(mod.moduleDoc);
       return { contents, word };
     }
   } catch {
@@ -783,7 +855,7 @@ function extractTypeDetails(type: Type): {
 /**
  * Inspect a specific symbol by name against the active TypeEnv, built-in catalog, and keywords.
  */
-export function inspectSymbolByName(name: string, typeEnv: TypeEnv | null, code?: string): TypeInspectionResult | null {
+export function inspectSymbolByName(name: string, typeEnv: TypeEnv | null | undefined, code?: string): TypeInspectionResult | null {
   if (!name || name.trim() === '') return null;
   const word = name.trim();
 
@@ -800,26 +872,14 @@ export function inspectSymbolByName(name: string, typeEnv: TypeEnv | null, code?
           typeString: details.typeString,
           category: 'module',
           signature: `module ${modName} { export ${details.signature} }`,
-          doc: `Exported member \`${memberName}\` of module \`${modName}\``,
+          doc: mod.docs?.get(memberName) || `Exported member \`${memberName}\` of module \`${modName}\``,
           details: details.details
         };
       }
     }
   }
 
-  // 2. Check Standard Library Built-ins
-  if (BUILTIN_HOVER_DB[word]) {
-    const builtin = BUILTIN_HOVER_DB[word];
-    return {
-      symbol: word,
-      typeString: builtin.signature,
-      category: 'builtin',
-      signature: builtin.signature,
-      doc: builtin.doc
-    };
-  }
-
-  // 3. Check Keywords
+  // 2. Check Keywords
   if (KEYWORD_HOVER_DB[word]) {
     const kw = KEYWORD_HOVER_DB[word];
     return {
@@ -869,7 +929,7 @@ export function inspectSymbolByName(name: string, typeEnv: TypeEnv | null, code?
         typeString: extracted.typeString,
         category: extracted.category,
         signature: `${isExport ? 'export ' : ''}${extracted.category === 'function' ? 'function' : isMut ? 'let mut' : 'let'} ${word}: ${extracted.signature}`,
-        doc: isExport ? `Exported top-level symbol in current module.` : `Top-level symbol bound in current environment.`,
+        doc: env.docs?.get(word) || (isExport ? `Exported top-level symbol in current module.` : `Top-level symbol bound in current environment.`),
         details: extracted.details
       };
     }
@@ -1077,13 +1137,13 @@ export function getAllSymbolsFromTypeEnv(typeEnv: TypeEnv | null): {
   }[] = [];
 
   if (!typeEnv) {
-    // Return standard library symbols
-    for (const [name, b] of Object.entries(BUILTIN_HOVER_DB)) {
+    const defaultEnv = new TypeChecker().checkProgram({ statements: [] });
+    for (const [name, type] of defaultEnv.vars.entries()) {
       list.push({
         category: 'builtins',
         name,
-        typeString: b.signature,
-        signature: b.signature
+        typeString: typeToString(type),
+        signature: `${name}: ${typeToString(type)}`
       });
     }
     return list;

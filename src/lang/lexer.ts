@@ -14,6 +14,7 @@ export interface Token {
   type: TokenType;
   value: string;
   loc: SourceLoc;
+  docComment?: string;
 }
 
 const KEYWORDS = new Set([
@@ -53,6 +54,7 @@ export class Lexer {
   private pos: number = 0;
   private line: number = 1;
   private col: number = 1;
+  private pendingDocComment?: string;
 
   constructor(input: string) {
     this.input = input;
@@ -74,12 +76,12 @@ export class Lexer {
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
         if (KEYWORDS.has(ident)) {
           if (ident === 'true' || ident === 'false') {
-            tokens.push({ type: 'BOOLEAN', value: ident, loc });
+            this.emit(tokens, { type: 'BOOLEAN', value: ident, loc });
           } else {
-            tokens.push({ type: 'KEYWORD', value: ident, loc });
+            this.emit(tokens, { type: 'KEYWORD', value: ident, loc });
           }
         } else {
-          tokens.push({ type: 'IDENT', value: ident, loc });
+          this.emit(tokens, { type: 'IDENT', value: ident, loc });
         }
         continue;
       }
@@ -88,7 +90,7 @@ export class Lexer {
       if (/[0-9]/.test(ch)) {
         const num = this.readNumber();
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
-        tokens.push({ type: 'NUMBER', value: num, loc });
+        this.emit(tokens, { type: 'NUMBER', value: num, loc });
         continue;
       }
 
@@ -96,7 +98,7 @@ export class Lexer {
       if (ch === '"' || ch === "'") {
         const str = this.readString(ch);
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
-        tokens.push({ type: 'STRING', value: str, loc });
+        this.emit(tokens, { type: 'STRING', value: str, loc });
         continue;
       }
 
@@ -106,21 +108,21 @@ export class Lexer {
       if (rest.startsWith('...')) {
         this.advance(3);
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
-        tokens.push({ type: 'SYMBOL', value: '...', loc });
+        this.emit(tokens, { type: 'SYMBOL', value: '...', loc });
         continue;
       }
 
       if (rest.startsWith('..=')) {
         this.advance(3);
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
-        tokens.push({ type: 'SYMBOL', value: '..=', loc });
+        this.emit(tokens, { type: 'SYMBOL', value: '..=', loc });
         continue;
       }
 
       if (rest.startsWith('..')) {
         this.advance(2);
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
-        tokens.push({ type: 'SYMBOL', value: '..', loc });
+        this.emit(tokens, { type: 'SYMBOL', value: '..', loc });
         continue;
       }
 
@@ -142,7 +144,7 @@ export class Lexer {
         const sym = rest.slice(0, 2);
         this.advance(2);
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
-        tokens.push({ type: 'SYMBOL', value: sym, loc });
+        this.emit(tokens, { type: 'SYMBOL', value: sym, loc });
         continue;
       }
 
@@ -152,7 +154,7 @@ export class Lexer {
       ) {
         this.advance(1);
         const loc: SourceLoc = { line: startLine, col: startCol, endLine: this.line, endCol: this.col };
-        tokens.push({ type: 'SYMBOL', value: ch, loc });
+        this.emit(tokens, { type: 'SYMBOL', value: ch, loc });
         continue;
       }
 
@@ -185,25 +187,50 @@ export class Lexer {
     }
   }
 
+  private emit(tokens: Token[], token: Token): void {
+    if (this.pendingDocComment) {
+      token.docComment = this.pendingDocComment;
+      this.pendingDocComment = undefined;
+    }
+    tokens.push(token);
+  }
+
+  private appendDocComment(comment: string): void {
+    this.pendingDocComment = this.pendingDocComment
+      ? `${this.pendingDocComment}\n${comment}`
+      : comment;
+  }
+
   private skipWhitespaceAndComments() {
+    let newlinesSinceComment = 0;
     while (this.pos < this.input.length) {
       const ch = this.input[this.pos];
       if (/\s/.test(ch)) {
+        if (ch === '\n') {
+          newlinesSinceComment++;
+          if (newlinesSinceComment > 1) this.pendingDocComment = undefined;
+        }
         this.advance(1);
         continue;
       }
 
       // Line comment //
       if (ch === '/' && this.input[this.pos + 1] === '/') {
+        const isDocComment = this.input[this.pos + 2] === '/' && this.input[this.pos + 3] !== '/';
+        const commentStart = this.pos;
         this.advance(2);
         while (this.pos < this.input.length && this.input[this.pos] !== '\n') {
           this.advance(1);
         }
+        if (isDocComment) this.appendDocComment(this.input.slice(commentStart + 3, this.pos).trimStart());
+        newlinesSinceComment = 0;
         continue;
       }
 
       // Block comment /* */
       if (ch === '/' && this.input[this.pos + 1] === '*') {
+        const commentStart = this.pos;
+        const isDocComment = this.input[this.pos + 2] === '*' && this.input[this.pos + 3] !== '*';
         const commentLine = this.line;
         const commentCol = this.col;
         this.advance(2);
@@ -221,6 +248,8 @@ export class Lexer {
           commentErr.loc = { line: commentLine, col: commentCol, endLine: this.line, endCol: this.col };
           throw commentErr;
         }
+        if (isDocComment) this.appendDocComment(this.input.slice(commentStart, this.pos));
+        newlinesSinceComment = 0;
         continue;
       }
 

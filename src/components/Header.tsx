@@ -43,7 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [isProjectMenuOpen, setIsProjectMenuOpen] = React.useState(false);
 
   return (
-    <header className="bg-slate-900 border-b border-slate-800 px-2 sm:px-3 py-1.5 sm:py-2 text-slate-200 flex items-center justify-between gap-1.5 sm:gap-2 shadow-md z-50 w-full max-w-full overflow-hidden">
+    <header className="relative bg-slate-900 border-b border-slate-800 px-2 sm:px-3 py-1.5 sm:py-2 text-slate-200 flex items-center justify-between gap-1.5 sm:gap-2 shadow-md z-50 w-full max-w-full overflow-visible">
       {/* Brand */}
       <div className="flex items-center space-x-2 shrink-0">
         <div className="w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-br from-indigo-600 to-purple-700 rounded-lg sm:rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">

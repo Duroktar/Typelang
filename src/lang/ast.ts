@@ -151,6 +151,7 @@ export interface GADTConstructor {
   typeParams: TypeParam[]; // e.g. Pack<a> or Pack: <a> or Pack<F<_>>
   params: GADTParam[];
   returnType?: TypeAST; // e.g. Expr<number> or Packed
+  docComment?: string;
   loc?: SourceLoc;
 }
 
@@ -159,6 +160,7 @@ export interface GADTDecl {
   name: string;
   typeParams: TypeParam[];
   constructors: GADTConstructor[];
+  docComment?: string;
   isExported?: boolean;
   loc?: SourceLoc;
 }
@@ -168,6 +170,7 @@ export interface TypeAliasDecl {
   name: string;
   typeParams: TypeParam[];
   type: TypeAST;
+  docComment?: string;
   isExported?: boolean;
   loc?: SourceLoc;
 }
@@ -568,6 +571,7 @@ export interface SLet {
   typeAnnotation?: TypeAST;
   init: Expr;
   isExported?: boolean;
+  docComment?: string;
   loc?: SourceLoc;
 }
 
@@ -586,6 +590,7 @@ export interface SFunction {
   body: Expr;
   whereBindings?: Statement[];
   isExported?: boolean;
+  docComment?: string;
   loc?: SourceLoc;
 }
 

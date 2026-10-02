@@ -1,3 +1,5 @@
+import { getParameterDoc, renderDocComment } from './docComments';
+import { getRootBuiltinDoc, getStdLibMemberDoc, getStdLibModuleDoc } from './stdlibDocs';
 // Bidirectional Type Checker & GADT Engine for TypeLang (Draft v0.1 Specification)
 import {
   Program,
@@ -82,6 +84,8 @@ export interface TypeEnv {
   parent?: TypeEnv;
   currentReturnType?: Type;
   defLocs?: Map<string, SourceLoc>;
+  docs?: Map<string, string>;
+  moduleDoc?: string;
 }
 
 export interface ScopeSymbol {
@@ -112,7 +116,9 @@ export function createScopedEnv(parent?: TypeEnv): TypeEnv {
     exports: new Set(),
     parent,
     currentReturnType: parent?.currentReturnType,
-    defLocs: (parent && parent.defLocs) ? new Map(parent.defLocs) : new Map()
+    defLocs: (parent && parent.defLocs) ? new Map(parent.defLocs) : new Map(),
+    docs: parent?.docs ? new Map(parent.docs) : new Map(),
+    moduleDoc: parent?.moduleDoc
   };
 }
 
@@ -177,7 +183,8 @@ export function createInitialEnv(): TypeEnv {
     typeAliases: new Map(),
     modules: new Map(),
     exports: new Set(),
-    defLocs: new Map()
+    defLocs: new Map(),
+    docs: new Map()
   };
 
   // Standard library functions
@@ -2997,6 +3004,27 @@ export function createInitialEnv(): TypeEnv {
   for (const name of Array.from(nodeEnv.vars.keys())) nodeEnv.exports.add(name);
   env.modules.set('Node', nodeEnv);
 
+  for (const [name] of env.vars) {
+    const doc = getRootBuiltinDoc(name);
+    if (doc) env.docs.set(name, doc);
+  }
+
+  for (const [moduleName, moduleEnv] of env.modules) {
+    moduleEnv.docs = new Map();
+    moduleEnv.moduleDoc = getStdLibModuleDoc(moduleName);
+    for (const [memberName, memberType] of moduleEnv.vars) {
+      const callableType = memberType.kind === 'poly' ? memberType.type : memberType;
+      const parameterNames = callableType.kind === 'fun'
+        ? callableType.params.map((param, index) => param.name || `arg${index + 1}`)
+        : [];
+      const returnType = callableType.kind === 'fun' ? typeToString(callableType.returnType) : undefined;
+      const doc = getStdLibMemberDoc(moduleName, memberName, parameterNames, returnType);
+      if (doc) {
+        moduleEnv.docs.set(memberName, doc);
+      }
+    }
+  }
+
   return env;
 }
 
@@ -3064,7 +3092,7 @@ export class TypeChecker {
           kind: 'type_alias',
           isExported: stmt.isExported,
           loc: stmt.decl.loc || stmt.loc,
-          doc: `Type Alias \`${stmt.decl.name}\``
+          doc: renderDocComment(stmt.decl.docComment) || `Type Alias \`${stmt.decl.name}\``
         });
       } else if (stmt.kind === 's_gadt') {
         env.gadts.set(stmt.decl.name, {
@@ -3079,7 +3107,7 @@ export class TypeChecker {
           kind: 'gadt',
           isExported: stmt.isExported,
           loc: stmt.decl.loc || stmt.loc,
-          doc: `GADT Type \`${stmt.decl.name}\``
+          doc: renderDocComment(stmt.decl.docComment) || `GADT Type \`${stmt.decl.name}\``
         });
 
         for (const ctor of stmt.decl.constructors) {
@@ -3127,7 +3155,8 @@ export class TypeChecker {
             kind: 'constructor',
             loc: ctor.loc,
             containerName: stmt.decl.name,
-            doc: `GADT Constructor \`${ctor.name}\` for type \`${stmt.decl.name}\``
+            doc: renderDocComment(ctor.docComment, ctor.params.map(param => param.name)) ||
+              `GADT Constructor \`${ctor.name}\` for type \`${stmt.decl.name}\``
           });
         }
       }
@@ -3409,9 +3438,9 @@ export class TypeChecker {
           isMut: stmt.isMut,
           isExported: stmt.isExported,
           loc: stmt.loc,
-          doc: isLocal
+          doc: renderDocComment(stmt.docComment) || (isLocal
             ? `${stmt.isMut ? 'Mutable local' : 'Local'} variable \`${stmt.name}\``
-            : `${stmt.isExported ? 'Exported top-level' : 'Top-level'} variable \`${stmt.name}\``
+            : `${stmt.isExported ? 'Exported top-level' : 'Top-level'} variable \`${stmt.name}\``)
         });
         break;
       }
@@ -3450,7 +3479,7 @@ export class TypeChecker {
               endLine: stmt.body.loc?.endLine || (stmt.loc?.line ? stmt.loc.line + 5000 : 999999),
               endCol: stmt.body.loc?.endCol || 999999
             },
-            doc: `Parameter \`${p.name}\` of function \`${stmt.name}\``
+            doc: getParameterDoc(stmt.docComment, p.name) || `Parameter \`${p.name}\` of function \`${stmt.name}\``
           });
         }
 
@@ -3469,7 +3498,8 @@ export class TypeChecker {
           kind: 'function',
           isExported: stmt.isExported,
           loc: stmt.loc,
-          doc: stmt.isExported ? `Exported function \`${stmt.name}\`` : `Function \`${stmt.name}\``
+          doc: renderDocComment(stmt.docComment, stmt.params.map(param => param.name)) ||
+            (stmt.isExported ? `Exported function \`${stmt.name}\`` : `Function \`${stmt.name}\``)
         });
 
         if (stmt.whereBindings && stmt.whereBindings.length > 0) {
@@ -3765,6 +3795,7 @@ export class TypeChecker {
         if (spec.isAll) {
           current.exports.forEach(expName => {
             if (current!.vars.has(expName)) env.vars.set(expName, current!.vars.get(expName)!);
+            if (current!.docs?.has(expName)) env.docs?.set(expName, current!.docs.get(expName)!);
             if (current!.gadts.has(expName)) env.gadts.set(expName, current!.gadts.get(expName)!);
             if (current!.typeAliases.has(expName)) env.typeAliases.set(expName, current!.typeAliases.get(expName)!);
           });
@@ -3774,6 +3805,8 @@ export class TypeChecker {
           let found = false;
           if (current.vars.has(importName)) {
             env.vars.set(targetName, current.vars.get(importName)!);
+            const doc = current.docs?.get(importName);
+            if (doc) env.docs?.set(targetName, doc);
             found = true;
           }
           if (current.gadts.has(importName)) {

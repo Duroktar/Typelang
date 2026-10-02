@@ -85,7 +85,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   onFileSelectRef.current = onFileSelect;
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [useFallbackTextarea, setUseFallbackTextarea] = useState<boolean>(false);
-  const [monacoLoaded, setMonacoLoaded] = useState<boolean>(false);
 
   // Editor Display & Large Screen Customization Preferences
   const [fontSize, setFontSize] = useState<number>(() => {
@@ -120,22 +119,34 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   // Quick mobile type inspector preview popup
   const [mobileHoverResult, setMobileHoverResult] = useState<TypeInspectionResult | null>(null);
+  const [mobileHoverColorized, setMobileHoverColorized] = useState<{ snippet: string; html: string } | null>(null);
   const mobileHoverTimeoutRef = useRef<any>(null);
+  const mobileHoverSnippet = mobileHoverResult
+    ? mobileHoverResult.category === 'keyword'
+      ? mobileHoverResult.symbol
+      : mobileHoverResult.signature || mobileHoverResult.typeString
+    : '';
+
+  useEffect(() => {
+    const colorize = monacoRef.current?.editor?.colorize;
+    if (!mobileHoverSnippet || !colorize || useFallbackTextarea) return;
+
+    let isCurrent = true;
+    void colorize(mobileHoverSnippet, 'typelang', { theme: 'typelang-dark' })
+      .then((html: string) => {
+        if (isCurrent) setMobileHoverColorized({ snippet: mobileHoverSnippet, html });
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [mobileHoverSnippet, useFallbackTextarea]);
 
   const diagnosticsRef = useRef<Diagnostic[]>(diagnostics);
   diagnosticsRef.current = diagnostics;
   const onApplyQuickFixRef = useRef(onApplyQuickFix);
   onApplyQuickFixRef.current = onApplyQuickFix;
-
-  // Auto fallback to light editor if Monaco takes too long to load on CDN
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!monacoLoaded) {
-        setUseFallbackTextarea(true);
-      }
-    }, 2500);
-    return () => clearTimeout(timer);
-  }, [monacoLoaded]);
 
   // Clean up global Monaco providers on unmount to prevent duplicate hover/completion entries
   useEffect(() => {
@@ -169,7 +180,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
-    setMonacoLoaded(true);
 
     const sortFilesByDependencies = (fileList: ProjectFile[]) => {
       const graph = new Map<string, string[]>();
@@ -1022,7 +1032,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             </div>
 
             <pre className="bg-slate-900 p-2 rounded-md border border-slate-800 font-mono text-[11px] text-emerald-300 overflow-x-auto whitespace-pre">
-              {mobileHoverResult.signature || mobileHoverResult.typeString}
+              {!useFallbackTextarea && mobileHoverColorized?.snippet === mobileHoverSnippet
+                ? <code dangerouslySetInnerHTML={{ __html: mobileHoverColorized.html }} />
+                : mobileHoverSnippet}
             </pre>
 
             {onOpenTypeExplorer && (

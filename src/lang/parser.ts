@@ -152,7 +152,9 @@ export class Parser {
   // ==================== STATEMENTS & DECLARATIONS ====================
 
   private parseStatement(): Statement {
+    const leadingDocComment = this.peek().docComment;
     const isExported = this.match('KEYWORD', 'export');
+    const docComment = leadingDocComment || this.peek().docComment;
 
     if (this.check('KEYWORD', 'extern')) {
       if (isExported) throw new Error("Cannot export an extern statement directly");
@@ -169,15 +171,15 @@ export class Parser {
     }
 
     if (this.check('KEYWORD', 'type')) {
-      return this.parseTypeDeclaration(isExported);
+      return this.parseTypeDeclaration(isExported, docComment);
     }
 
     if (this.check('KEYWORD', 'function')) {
-      return this.parseFunctionDeclaration(isExported);
+      return this.parseFunctionDeclaration(isExported, docComment);
     }
 
     if (this.check('KEYWORD', 'let')) {
-      return this.parseLetStatement(isExported);
+      return this.parseLetStatement(isExported, docComment);
     }
 
     // Expression statement
@@ -563,7 +565,7 @@ export class Parser {
     };
   }
 
-  private parseTypeDeclaration(isExported: boolean): Statement {
+  private parseTypeDeclaration(isExported: boolean, docComment?: string): Statement {
     const tok = this.consume('KEYWORD', 'type');
     const name = this.consume('IDENT', undefined, "Expected type name").value;
     const typeParams = this.parseTypeParams();
@@ -581,6 +583,7 @@ export class Parser {
           name,
           typeParams,
           constructors,
+          docComment: docComment || tok.docComment,
           isExported,
           loc: tok.loc
         },
@@ -599,6 +602,7 @@ export class Parser {
         name,
         typeParams,
         type,
+        docComment: docComment || tok.docComment,
         isExported,
         loc: tok.loc
       },
@@ -618,6 +622,7 @@ export class Parser {
     this.match('SYMBOL', '|'); // optional leading pipe
 
     do {
+      const leadingDocComment = this.peek().docComment || this.previous().docComment;
       const ctorTok = this.consume('IDENT', undefined, "Expected constructor name");
       const name = ctorTok.value;
 
@@ -660,6 +665,7 @@ export class Parser {
         typeParams,
         params,
         returnType,
+        docComment: leadingDocComment || ctorTok.docComment,
         loc: ctorTok.loc
       });
     } while (this.match('SYMBOL', '|'));
@@ -682,7 +688,7 @@ export class Parser {
     return params;
   }
 
-  private parseFunctionDeclaration(isExported: boolean): Statement {
+  private parseFunctionDeclaration(isExported: boolean, docComment?: string): Statement {
     const tok = this.consume('KEYWORD', 'function');
     const name = this.consumeIdentOrKeyword("Expected function name");
     const typeParams = this.parseTypeParams();
@@ -727,11 +733,12 @@ export class Parser {
       body,
       whereBindings,
       isExported,
+      docComment: docComment || tok.docComment,
       loc: tok.loc
     };
   }
 
-  private parseLetStatement(isExported: boolean): Statement {
+  private parseLetStatement(isExported: boolean, docComment?: string): Statement {
     const tok = this.consume('KEYWORD', 'let');
     const isMut = this.match('KEYWORD', 'mut');
     const name = this.consume('IDENT', undefined, "Expected variable name").value;
@@ -752,6 +759,7 @@ export class Parser {
       typeAnnotation,
       init,
       isExported,
+      docComment: docComment || tok.docComment,
       loc: tok.loc
     };
   }

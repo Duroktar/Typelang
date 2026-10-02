@@ -74,6 +74,38 @@ It handles:
 
 This is a complete front-end tokenization layer, not a loose parser shortcut.
 
+### Documentation comments
+
+Contiguous `///` lines and `/** ... */` blocks immediately before a declaration
+are retained as documentation trivia. A blank line separates a comment from the
+following declaration. Documentation is available in editor hover for functions,
+parameters, variables, type aliases, GADTs, and GADT constructors; ordinary
+`//` and `/* ... */` comments remain non-documenting comments.
+
+Function comments support Markdown summaries and tags such as `@param`,
+`@returns`/`@return`, `@example`, `@deprecated`, `@since`, `@throws`, `@see`,
+and `@typeparam`/`@template`. `@param` also accepts an optional JSDoc-style type
+and `-` separator. Parameter descriptions appear both in the function hover and
+when hovering the parameter itself. The formatter normalizes documentation to
+`///` lines and preserves it on the declaration.
+
+Standard-library module and global-function hovers use the same doc-comment
+renderer. The curated standard-library catalog supplies descriptions and
+examples, while the checker derives parameter names and return types from its
+actual synthetic API types. Qualified and selectively imported members retain
+their documentation in hovers.
+
+```typelang
+/// Combines a display name and a greeting.
+/// @param name - The person to greet.
+/// @returns The completed greeting.
+/// @example
+/// greet("Ada")
+export function greet(name: string): string {
+  concat("Hello, ", name)
+}
+```
+
 ## Parser overview
 
 The parser in `src/lang/parser.ts` is a recursive-descent parser built around `parseProgram()`, `parseStatement()`, and `parseExpr()`.

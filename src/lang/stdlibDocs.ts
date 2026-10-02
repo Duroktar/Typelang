@@ -1,3 +1,5 @@
+import { renderDocComment } from './docComments';
+
 export interface StdLibFunctionDoc {
   name: string;
   signature: string;
@@ -1763,3 +1765,192 @@ type Ord<a> = { compare: (x: a, y: a) => Ordering }`,
     ]
   }
 ];
+
+const ROOT_BUILTIN_DOC_COMMENTS: Record<string, string> = {
+  print: `/**
+ * Writes a value to standard output without appending a newline.
+ * @param val The value to write.
+ * @returns Nothing.
+ */`,
+  println: `/**
+ * Writes a value to standard output followed by a newline.
+ * @param val The value to write.
+ * @returns Nothing.
+ */`,
+  to_string: `/**
+ * Converts a value to its canonical string representation.
+ * @param val The value to convert.
+ * @returns The formatted string.
+ */`,
+  concat: `/**
+ * Concatenates two strings in order.
+ * @param a The first string.
+ * @param b The string to append.
+ * @returns The concatenated string.
+ */`,
+  requestAnimationFrame: `/**
+ * Schedules a callback for the next animation frame in browser runtimes.
+ * @param callback The function to invoke for the next frame.
+ */`,
+  setInterval: `/**
+ * Repeatedly invokes a callback at the requested interval.
+ * @param callback The function to invoke.
+ * @param ms The delay between invocations, in milliseconds.
+ * @returns A timer handle that can be passed to clearInterval.
+ */`,
+  clearInterval: `/**
+ * Cancels a repeating timer created by setInterval.
+ * @param handle The timer handle to cancel.
+ */`,
+  setTimeout: `/**
+ * Schedules a callback to run once after a delay.
+ * @param callback The function to invoke.
+ * @param ms The delay before invocation, in milliseconds.
+ * @returns A timer handle that can be passed to clearTimeout.
+ */`,
+  clearTimeout: `/**
+ * Cancels a pending one-shot timer created by setTimeout.
+ * @param handle The timer handle to cancel.
+ */`
+};
+
+export function getRootBuiltinDoc(name: string): string | undefined {
+  const raw = ROOT_BUILTIN_DOC_COMMENTS[name];
+  return raw ? renderDocComment(raw) : undefined;
+}
+
+export function getStdLibModuleDoc(moduleName: string): string | undefined {
+  const normalizedName = moduleName.toLowerCase();
+  const module = STDLIB_MODULES.find(entry => entry.id.toLowerCase() === normalizedName || entry.name.toLowerCase() === normalizedName);
+  return module?.description;
+}
+
+export function getStdLibMemberDoc(
+  moduleName: string,
+  memberName: string,
+  parameterNames: string[] = [],
+  resultType?: string
+): string | undefined {
+  const normalizedName = moduleName.toLowerCase();
+  const module = STDLIB_MODULES.find(entry => entry.id.toLowerCase() === normalizedName || entry.name.toLowerCase() === normalizedName);
+  if (!module) return undefined;
+  const fn = module.functions.find(entry => entry.name === memberName);
+  const operationDocs: Record<string, string> = {
+    pure: 'Lifts a plain value into the module’s computational context.',
+    of: 'Constructs a value in the module’s context.',
+    map: 'Transforms the value inside the context without changing the context itself.',
+    flatMap: 'Chains a context-producing transformation while preserving the module’s sequencing rules.',
+    filter: 'Keeps the value only when it satisfies the supplied predicate.',
+    fold: 'Reduces the value to a result by selecting the appropriate branch or handler.',
+    getOrElse: 'Extracts the contained value, or returns the provided fallback.',
+    flatten: 'Removes one layer of nested context.',
+    zip: 'Combines two values while preserving the module’s context semantics.',
+    tap: 'Runs a side-effecting callback and returns the original contextual value.',
+    swap: 'Exchanges the left and right cases of the value.',
+    mapError: 'Transforms the error channel while preserving a successful value.',
+    fromOption: 'Converts an optional value into this result type using the provided error.',
+    toOption: 'Converts this value to an Option, discarding error information when present.',
+    run: 'Executes the deferred computation with the supplied environment or state.',
+    ask: 'Reads the complete environment supplied to a Reader computation.',
+    asks: 'Projects a value from the Reader environment.',
+    tell: 'Appends a value to the Writer output.',
+    listen: 'Returns the computation result together with the output it produced.',
+    get: 'Reads the current state.',
+    set: 'Replaces the current state with the supplied value.',
+    modify: 'Updates the current state with a transformation function.',
+    evalState: 'Runs a state computation and returns only its result.',
+    execState: 'Runs a state computation and returns only its final state.',
+    combine: 'Combines two values using the algebraic instance’s operation.',
+    concatAll: 'Combines a collection of values from left to right.',
+    compare: 'Compares two values and returns their ordering.',
+    contramap: 'Transforms inputs before passing them to the underlying operation.',
+    bimap: 'Transforms both sides of a two-parameter value.',
+    dimap: 'Transforms the input and output of a profunctor.',
+    foldLeft: 'Traverses a collection from left to right while carrying an accumulator.',
+    foldMap: 'Maps each element into a monoid and combines the results.',
+    accumulate: 'Combines multiple validations while accumulating all available errors.',
+    ap: 'Applies a function held in an applicative context to a contextual value.',
+    lift2: 'Lifts a two-argument function to operate on applicative values.',
+    lift3: 'Lifts a three-argument function to operate on applicative values.',
+    isSome: 'Returns whether the Option contains a value.',
+    isNone: 'Returns whether the Option is empty.',
+    isOk: 'Returns whether the Result represents success.',
+    isErr: 'Returns whether the Result represents failure.',
+    isLeft: 'Returns whether the Either contains a left value.',
+    isRight: 'Returns whether the Either contains a right value.',
+    isValid: 'Returns whether the Validation represents success.',
+    isInvalid: 'Returns whether the Validation contains errors.',
+    min: 'Returns the smaller of two ordered values.',
+    max: 'Returns the larger of two ordered values.',
+    clamp: 'Bounds a value to the inclusive minimum and maximum.',
+    between: 'Checks whether a value falls within the supplied bounds.',
+    invert: 'Returns the inverse of a value in the group.',
+    subtract: 'Combines a value with the inverse of another value.',
+    stringify: 'Serializes a value as JSON text.',
+    parse: 'Parses JSON text into a TypeLang value.',
+    envGet: 'Reads an environment variable by name.',
+    readFile: 'Reads text from a file path.',
+    writeFile: 'Writes text to a file path.',
+    createApp: 'Creates a new HTTP application instance.',
+    getElementById: 'Looks up a DOM element by its identifier.',
+    createElement: 'Creates a DOM element with the requested tag name.',
+    setText: 'Replaces an element’s text content.',
+    setHtml: 'Replaces an element’s HTML content.',
+    setAttr: 'Sets an attribute on a DOM element.',
+    appendChild: 'Appends a child node to a parent node.',
+    addEventListener: 'Registers a callback for a DOM event.',
+    mount: 'Mounts a virtual DOM tree into a browser container.'
+  };
+
+  const description = fn?.description || operationDocs[memberName] ||
+    `Provides the ${memberName} operation for values in the ${moduleName} module.`;
+  const example = fn?.example;
+
+  const paramDescriptions: Record<string, string> = {
+    arr: 'The input array or collection.',
+    opt: 'The optional value to inspect or transform.',
+    res: 'The result value to inspect or transform.',
+    fn: 'The callback applied to the input value.',
+    pred: 'The predicate used to decide which values to keep.',
+    elem: 'The element to add or combine.',
+    initial: 'The initial accumulator value.',
+    init: 'The initial accumulator value.',
+    acc: 'The accumulated value passed to the next step.',
+    accumulator: 'The accumulated value passed to the next step.',
+    x: 'The value supplied to the callback.',
+    value: 'The value to process.',
+    val: 'The value to process.',
+    defaultVal: 'The fallback value used when no value is available.',
+    callback: 'The function invoked by this operation.'
+  };
+  const signature = fn?.signature || '';
+  const signatureStart = signature.indexOf('(');
+  let signatureEnd = signatureStart;
+  let depth = 0;
+  for (; signatureEnd >= 0 && signatureEnd < signature.length; signatureEnd++) {
+    if (signature[signatureEnd] === '(') depth++;
+    if (signature[signatureEnd] === ')' && --depth === 0) break;
+  }
+  const parameterList = signatureStart >= 0 ? signature.slice(signatureStart + 1, signatureEnd) : '';
+  const parameters: string[] = [];
+  let nestedDepth = 0;
+  let segmentStart = 0;
+  for (let index = 0; index <= parameterList.length; index++) {
+    const char = parameterList[index];
+    if (char === '(' || char === '[' || char === '{') nestedDepth++;
+    if (char === ')' || char === ']' || char === '}') nestedDepth--;
+    if ((char === ',' && nestedDepth === 0) || index === parameterList.length) {
+      const parameterName = parameterList.slice(segmentStart, index).split(':')[0].trim();
+      if (parameterName) parameters.push(parameterName);
+      segmentStart = index + 1;
+    }
+  }
+  const names = parameters.length ? parameters : parameterNames;
+  const parameterTags = names.map(name => ` * @param ${name} ${paramDescriptions[name] || `The ${name} input used by this operation.`}`).join('\n');
+  const returnText = (signatureEnd >= 0 && fn
+    ? signature.slice(signatureEnd + 1).replace(/^\s*:\s*/, '').trim()
+    : resultType) || '';
+  const exampleTag = example ? ` * @example\n * ${example.replace(/\n/g, '\n * ')}\n` : '';
+  const raw = `/**\n * ${description.replace(/\n/g, '\n * ')}\n${parameterTags ? `${parameterTags}\n` : ''}${returnText ? ` * @returns The result of this operation (${returnText}).\n` : ''}${exampleTag} */`;
+  return renderDocComment(raw, names);
+}
