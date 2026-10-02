@@ -48,6 +48,7 @@ import { example44MonadsDoWhere } from "./44_monads_do_where";
 import { example45TypecheckerStressTest } from "./45_typechecker_stress_test";
 import { example46MonadicStdlibSuite } from "./46_monadic_stdlib_suite";
 import { example47AlgebraicGroupTypes } from "./47_algebraic_group_types";
+import { example48UltimateLanguageTour } from "./48_ultimate_language_tour";
 
 export const EXAMPLES: ExampleProgram[] = [
   example01GadtEval,
@@ -97,6 +98,7 @@ export const EXAMPLES: ExampleProgram[] = [
   example45TypecheckerStressTest,
   example46MonadicStdlibSuite,
   example47AlgebraicGroupTypes,
+  example48UltimateLanguageTour,
 ];
 
 export {
@@ -147,4 +149,5 @@ export {
   example45TypecheckerStressTest,
   example46MonadicStdlibSuite,
   example47AlgebraicGroupTypes,
+  example48UltimateLanguageTour,
 };
