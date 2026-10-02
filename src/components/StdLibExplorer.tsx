@@ -26,6 +26,10 @@ interface StdLibExplorerProps {
   initialModuleId?: string;
 }
 
+const escapeRegExp = (str: string): string => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
   onLoadCodeIntoEditor,
   onSelectModule,
@@ -52,6 +56,16 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
     });
   }, [searchQuery, selectedCategory]);
 
+  const filteredFunctions = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return selectedModule.functions;
+    return selectedModule.functions.filter(f => 
+      f.name.toLowerCase().includes(q) ||
+      f.signature.toLowerCase().includes(q) ||
+      f.description.toLowerCase().includes(q)
+    );
+  }, [searchQuery, selectedModule.functions]);
+
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopiedSection(label);
@@ -61,6 +75,26 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
   const handleTryInEditor = (snippet: string) => {
     if (onLoadCodeIntoEditor) {
       onLoadCodeIntoEditor(snippet, selectedModule.name);
+    }
+  };
+
+  const highlightText = (text: string, query: string) => {
+    if (!query) return <span>{text}</span>;
+    const trimmed = query.trim();
+    if (!trimmed) return <span>{text}</span>;
+    try {
+      const parts = text.split(new RegExp(`(${escapeRegExp(trimmed)})`, 'gi'));
+      return (
+        <span>
+          {parts.map((part, i) => 
+            part.toLowerCase() === trimmed.toLowerCase()
+              ? <mark key={i} className="bg-amber-500/30 text-amber-100 px-0.5 rounded font-medium">{part}</mark>
+              : part
+          )}
+        </span>
+      );
+    } catch {
+      return <span>{text}</span>;
     }
   };
 
@@ -75,7 +109,8 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
           <div>
             <div className="flex items-center space-x-2">
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">Standard Library Explorer</h2>
-              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              <span className="text-slate-600" aria-hidden="true">·</span>
+              <span className="text-xs font-semibold text-emerald-400">
                 {STDLIB_MODULES.length} Built-in Modules
               </span>
             </div>
@@ -125,12 +160,19 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
           <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin scrollbar-thumb-slate-800">
             {filteredModules.map(mod => {
               const isSelected = mod.id === selectedModule.id;
+              const matchingFuncs = searchQuery.trim() !== ''
+                ? mod.functions.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase().trim()))
+                : [];
+
               return (
                 <button
                   key={mod.id}
                   onClick={() => {
                     setSelectedModuleId(mod.id);
                     if (onSelectModule) onSelectModule(mod.id);
+                    if (searchQuery.trim() !== '') {
+                      setViewMode('functions');
+                    }
                   }}
                   className={`w-full text-left p-2.5 rounded-xl transition cursor-pointer border ${
                     isSelected
@@ -139,25 +181,47 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-mono font-bold text-xs text-indigo-300">{mod.name}</span>
+                    <span className="font-mono font-bold text-xs text-indigo-300">{highlightText(mod.name, searchQuery)}</span>
                     <span
-                      className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider ${
+                      className={`text-[9px] font-bold uppercase tracking-wider ${
                         mod.category === 'Monad'
-                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                          ? 'text-purple-400'
                           : mod.category === 'Algebraic'
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          ? 'text-amber-400'
                           : mod.category === 'Core'
-                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          ? 'text-sky-400'
+                          : 'text-emerald-400'
                       }`}
                     >
                       {mod.category}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 line-clamp-1 leading-snug">{mod.tagline}</p>
+                  <p className="text-[11px] text-slate-400 line-clamp-1 leading-snug">{highlightText(mod.tagline, searchQuery)}</p>
+                  
+                  {/* Inline list of matching functions when search query is active */}
+                  {matchingFuncs.length > 0 && (
+                    <div className="mt-1.5 pt-1.5 border-t border-slate-800/40 flex flex-wrap gap-x-1.5 gap-y-0.5">
+                      {matchingFuncs.slice(0, 3).map(f => (
+                        <span key={f.name} className="text-[10px] font-mono text-indigo-400">
+                          · {highlightText(f.name, searchQuery)}
+                        </span>
+                      ))}
+                      {matchingFuncs.length > 3 && (
+                        <span className="text-[10px] font-mono text-slate-500">
+                          (+{matchingFuncs.length - 3} more)
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </button>
               );
             })}
+
+            {filteredModules.length === 0 && (
+              <div className="p-4 text-center">
+                <p className="text-xs text-slate-500 font-medium">No modules found matching "{searchQuery}"</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -166,15 +230,16 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
           {/* Module Detail Header */}
           <div className="p-4 bg-slate-900/60 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
             <div>
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2 text-xs">
                 <h3 className="text-base font-mono font-bold text-white">{selectedModule.name}</h3>
+                <span className="text-slate-600" aria-hidden="true">·</span>
                 <span
-                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                  className={`text-[10px] font-bold uppercase tracking-widest ${
                     selectedModule.category === 'Monad'
-                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                      ? 'text-purple-400'
                       : selectedModule.category === 'Core'
-                      ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      ? 'text-sky-400'
+                      : 'text-emerald-400'
                   }`}
                 >
                   {selectedModule.category} Module
@@ -232,7 +297,9 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
               }`}
             >
               <FunctionSquare className="w-3.5 h-3.5" />
-              <span>Function Signatures ({selectedModule.functions.length})</span>
+              <span>
+                Function Signatures ({searchQuery.trim() !== '' ? `${filteredFunctions.length} of ` : ''}{selectedModule.functions.length})
+              </span>
             </button>
 
             {selectedModule.category === 'Monad' && (
@@ -302,49 +369,55 @@ export const StdLibExplorer: React.FC<StdLibExplorerProps> = ({
 
             {viewMode === 'functions' && (
               <div className="space-y-4 max-w-4xl">
-                {selectedModule.functions.map(fn => (
-                  <div key={fn.name} className="bg-slate-900/90 rounded-xl p-4 border border-slate-800 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <span className="font-mono font-bold text-amber-300 text-sm">{fn.name}</span>
-                        <code className="font-mono text-xs text-indigo-300 bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-500/20">
-                          {fn.signature}
-                        </code>
-                      </div>
-                      {onLoadCodeIntoEditor && (
-                        <button
-                          onClick={() => handleTryInEditor(fn.example)}
-                          className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold transition"
-                        >
-                          <Play className="w-3 h-3 fill-current" />
-                          <span>Run Example</span>
-                        </button>
-                      )}
-                    </div>
-
-                    <p className="text-xs text-slate-300 leading-relaxed">{fn.description}</p>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
-                      <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                          Implementation
-                        </span>
-                        <pre className="font-mono text-[11px] text-emerald-400 overflow-x-auto whitespace-pre">
-                          {fn.typeLangImpl}
-                        </pre>
-                      </div>
-
-                      <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                          Example
-                        </span>
-                        <pre className="font-mono text-[11px] text-cyan-300 overflow-x-auto whitespace-pre">
-                          {fn.example}
-                        </pre>
-                      </div>
-                    </div>
+                {filteredFunctions.length === 0 ? (
+                  <div className="bg-slate-900/40 rounded-xl p-8 border border-slate-800 text-center">
+                    <p className="text-xs text-slate-400 font-medium">No functions found matching "{searchQuery}" in this module</p>
                   </div>
-                ))}
+                ) : (
+                  filteredFunctions.map(fn => (
+                    <div key={fn.name} className="bg-slate-900/90 rounded-xl p-4 border border-slate-800 space-y-2.5 animate-in fade-in slide-in-from-bottom-1 duration-200">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-mono font-bold text-amber-300 text-sm">{highlightText(fn.name, searchQuery)}</span>
+                          <code className="font-mono text-xs text-indigo-300 bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-500/20">
+                            {highlightText(fn.signature, searchQuery)}
+                          </code>
+                        </div>
+                        {onLoadCodeIntoEditor && (
+                          <button
+                            onClick={() => handleTryInEditor(fn.example)}
+                            className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold transition"
+                          >
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>Run Example</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-300 leading-relaxed">{highlightText(fn.description, searchQuery)}</p>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                            Implementation
+                          </span>
+                          <pre className="font-mono text-[11px] text-emerald-400 overflow-x-auto whitespace-pre">
+                            {fn.typeLangImpl}
+                          </pre>
+                        </div>
+
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                            Example
+                          </span>
+                          <pre className="font-mono text-[11px] text-cyan-300 overflow-x-auto whitespace-pre">
+                            {fn.example}
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             )}
 

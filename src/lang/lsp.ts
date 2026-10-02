@@ -526,18 +526,27 @@ export function getDefinitionLocation(code: string, line: number, col: number): 
     const lexer = new Lexer(code);
     const tokens = lexer.tokenize();
     const parser = new Parser(tokens);
-    const ast = parser.parseProgram();
+    const ast = parser.parseProgram(true);
     const checker = new TypeChecker();
     checker.checkProgram(ast);
 
     const matchedSymbol = findMatchingSymbol(checker.symbols, word, line, col);
-    if (matchedSymbol && matchedSymbol.loc) {
-      return {
-        line: matchedSymbol.loc.line,
-        col: matchedSymbol.loc.col,
-        endLine: matchedSymbol.loc.endLine || matchedSymbol.loc.line,
-        endCol: matchedSymbol.loc.endCol || (matchedSymbol.loc.col + word.length)
-      };
+    if (matchedSymbol) {
+      if (matchedSymbol.kind === 'reference' && matchedSymbol.scopeRange) {
+        return {
+          line: matchedSymbol.scopeRange.startLine,
+          col: matchedSymbol.scopeRange.startCol,
+          endLine: matchedSymbol.scopeRange.endLine,
+          endCol: matchedSymbol.scopeRange.endCol
+        };
+      } else if (matchedSymbol.loc) {
+        return {
+          line: matchedSymbol.loc.line,
+          col: matchedSymbol.loc.col,
+          endLine: matchedSymbol.loc.endLine || matchedSymbol.loc.line,
+          endCol: matchedSymbol.loc.endCol || (matchedSymbol.loc.col + word.length)
+        };
+      }
     }
   } catch {
     // Return null if parsing fails or symbol not found
@@ -573,7 +582,7 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
     const lexer = new Lexer(code);
     const tokens = lexer.tokenize();
     const parser = new Parser(tokens);
-    const ast = parser.parseProgram();
+    const ast = parser.parseProgram(true);
     const checker = new TypeChecker();
     const env = checker.checkProgram(ast);
 
@@ -840,7 +849,7 @@ export function inspectSymbolByName(name: string, typeEnv: TypeEnv | null, code?
       const lexer = new Lexer(code);
       const tokens = lexer.tokenize();
       const parser = new Parser(tokens);
-      const ast = parser.parseProgram();
+      const ast = parser.parseProgram(true);
       const checker = new TypeChecker();
       env = checker.checkProgram(ast);
     } catch {
@@ -871,7 +880,7 @@ export function inspectSymbolByName(name: string, typeEnv: TypeEnv | null, code?
         const lexer = new Lexer(code);
         const tokens = lexer.tokenize();
         const parser = new Parser(tokens);
-        const ast = parser.parseProgram();
+        const ast = parser.parseProgram(true);
         const checker = new TypeChecker();
         checker.checkProgram(ast);
         const matched = checker.symbols.find(s => s.name === word);
@@ -992,7 +1001,7 @@ export function inspectTypeAtPosition(
     const lexer = new Lexer(code);
     const tokens = lexer.tokenize();
     const parser = new Parser(tokens);
-    const ast = parser.parseProgram();
+    const ast = parser.parseProgram(true);
     const checker = new TypeChecker();
     checker.checkProgram(ast);
 
@@ -1154,7 +1163,7 @@ export function getCompletionInformation(code: string, line: number, col: number
   const parser = new Parser(lexer.tokenize());
   let ast;
   try {
-    ast = parser.parseProgram();
+    ast = parser.parseProgram(true);
   } catch (e: any) {
     if (e.program) ast = e.program;
     else return [];

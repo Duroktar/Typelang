@@ -81,12 +81,13 @@ export interface TypeEnv {
   exports: Set<string>;
   parent?: TypeEnv;
   currentReturnType?: Type;
+  defLocs?: Map<string, SourceLoc>;
 }
 
 export interface ScopeSymbol {
   name: string;
   type: Type;
-  kind: 'parameter' | 'variable' | 'function' | 'pattern' | 'loop' | 'field' | 'module' | 'gadt' | 'constructor' | 'type_alias' | 'extern';
+  kind: 'parameter' | 'variable' | 'function' | 'pattern' | 'loop' | 'field' | 'module' | 'gadt' | 'constructor' | 'type_alias' | 'extern' | 'reference';
   isMut?: boolean;
   isExported?: boolean;
   loc?: SourceLoc;
@@ -110,7 +111,8 @@ export function createScopedEnv(parent?: TypeEnv): TypeEnv {
     modules: parent ? new Map(parent.modules) : new Map(),
     exports: new Set(),
     parent,
-    currentReturnType: parent?.currentReturnType
+    currentReturnType: parent?.currentReturnType,
+    defLocs: (parent && parent.defLocs) ? new Map(parent.defLocs) : new Map()
   };
 }
 
@@ -174,7 +176,8 @@ export function createInitialEnv(): TypeEnv {
     gadts: new Map(),
     typeAliases: new Map(),
     modules: new Map(),
-    exports: new Set()
+    exports: new Set(),
+    defLocs: new Map()
   };
 
   // Standard library functions
@@ -3116,6 +3119,7 @@ export class TypeChecker {
           }
 
           env.vars.set(ctor.name, fnType);
+          if (ctor.loc) env.defLocs?.set(ctor.name, ctor.loc);
           if (stmt.isExported) env.exports.add(ctor.name);
           this.registerSymbol({
             name: ctor.name,
@@ -3152,6 +3156,7 @@ export class TypeChecker {
           funType = { kind: 'poly', quantifiers, quantifierKinds, type: funType };
         }
         env.vars.set(stmt.name, funType);
+        if (stmt.loc) env.defLocs?.set(stmt.name, stmt.loc);
         if (stmt.isExported) env.exports.add(stmt.name);
       }
     }
@@ -3390,6 +3395,7 @@ export class TypeChecker {
           type = this.synthExpr(stmt.init, env);
         }
         env.vars.set(stmt.name, type);
+        if (stmt.loc) env.defLocs?.set(stmt.name, stmt.loc);
         if (stmt.isMut) {
           env.mutVars.add(stmt.name);
         }
@@ -3431,6 +3437,7 @@ export class TypeChecker {
 
         for (const p of params) {
           localEnv.vars.set(p.name, p.type);
+          if (p.loc) localEnv.defLocs?.set(p.name, p.loc);
           this.registerSymbol({
             name: p.name,
             type: p.type,
@@ -3451,6 +3458,10 @@ export class TypeChecker {
 
         let funType = env.vars.get(stmt.name) || { kind: 'fun', params, returnType };
         localEnv.vars.set(stmt.name, funType);
+        if (stmt.loc) {
+          localEnv.defLocs?.set(stmt.name, stmt.loc);
+          env.defLocs?.set(stmt.name, stmt.loc);
+        }
         localEnv.currentReturnType = returnType;
         this.registerSymbol({
           name: stmt.name,
@@ -3476,6 +3487,15 @@ export class TypeChecker {
         });
 
         if (stmt.isExported) env.exports.add(stmt.decl.name);
+        if (stmt.loc) env.defLocs?.set(stmt.decl.name, stmt.loc);
+
+        this.registerSymbol({
+          name: stmt.decl.name,
+          type: { kind: 'cons', name: stmt.decl.name, args: [] },
+          kind: 'gadt',
+          loc: stmt.loc,
+          doc: `GADT Type \`${stmt.decl.name}\``
+        });
 
         // Register constructors in env as constructor functions
         for (const ctor of stmt.decl.constructors) {
@@ -3531,6 +3551,15 @@ export class TypeChecker {
           type: targetType
         });
         if (stmt.isExported) env.exports.add(stmt.decl.name);
+        if (stmt.loc) env.defLocs?.set(stmt.decl.name, stmt.loc);
+
+        this.registerSymbol({
+          name: stmt.decl.name,
+          type: targetType,
+          kind: 'type_alias',
+          loc: stmt.loc,
+          doc: `Type Alias \`${stmt.decl.name}\``
+        });
         break;
       }
       case 's_module': {
@@ -3825,10 +3854,42 @@ export class TypeChecker {
               return freshTypeVar('__member__');
             }
             if (modEnv.vars.has(expr.name)) {
-              return this.instantiate(modEnv.vars.get(expr.name)!);
+              const type = this.instantiate(modEnv.vars.get(expr.name)!);
+              const foundLoc = modEnv.defLocs?.get(expr.name);
+              if (expr.loc && foundLoc) {
+                this.registerSymbol({
+                  name: expr.name,
+                  type,
+                  kind: 'reference',
+                  loc: expr.loc,
+                  scopeRange: {
+                    startLine: foundLoc.line,
+                    startCol: foundLoc.col,
+                    endLine: foundLoc.endLine || foundLoc.line,
+                    endCol: foundLoc.endCol || foundLoc.col
+                  }
+                });
+              }
+              return type;
             }
             if (modEnv.modules.has(expr.name)) {
-              return this.moduleEnvToType(modEnv.modules.get(expr.name)!);
+              const type = this.moduleEnvToType(modEnv.modules.get(expr.name)!);
+              const foundLoc = modEnv.defLocs?.get(expr.name);
+              if (expr.loc && foundLoc) {
+                this.registerSymbol({
+                  name: expr.name,
+                  type,
+                  kind: 'reference',
+                  loc: expr.loc,
+                  scopeRange: {
+                    startLine: foundLoc.line,
+                    startCol: foundLoc.col,
+                    endLine: foundLoc.endLine || foundLoc.line,
+                    endCol: foundLoc.endCol || foundLoc.col
+                  }
+                });
+              }
+              return type;
             }
 
             const candidateExports = Array.from(modEnv.exports);
@@ -3845,14 +3906,38 @@ export class TypeChecker {
         }
 
         let curr: TypeEnv | undefined = env;
+        let foundLoc: SourceLoc | undefined = undefined;
+        let resolvedType: Type | undefined = undefined;
         while (curr) {
           if (curr.vars.has(expr.name)) {
-            return this.instantiate(curr.vars.get(expr.name)!);
+            resolvedType = this.instantiate(curr.vars.get(expr.name)!);
+            foundLoc = curr.defLocs?.get(expr.name);
+            break;
           }
           if (curr.modules.has(expr.name)) {
-            return this.moduleEnvToType(curr.modules.get(expr.name)!);
+            resolvedType = this.moduleEnvToType(curr.modules.get(expr.name)!);
+            foundLoc = curr.defLocs?.get(expr.name);
+            break;
           }
           curr = curr.parent;
+        }
+
+        if (resolvedType) {
+          if (expr.loc && foundLoc) {
+            this.registerSymbol({
+              name: expr.name,
+              type: resolvedType,
+              kind: 'reference',
+              loc: expr.loc,
+              scopeRange: {
+                startLine: foundLoc.line,
+                startCol: foundLoc.col,
+                endLine: foundLoc.endLine || foundLoc.line,
+                endCol: foundLoc.endCol || foundLoc.col
+              }
+            });
+          }
+          return resolvedType;
         }
 
         // Check for do-notation desugared flatMap or pure

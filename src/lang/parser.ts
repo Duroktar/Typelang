@@ -38,12 +38,53 @@ export class Parser {
     this.tokens = tokens;
   }
 
-  public parseProgram(): Program {
+  public parseProgram(resilient = false): Program {
     const statements: Statement[] = [];
     while (!this.isAtEnd()) {
-      statements.push(this.parseStatement());
+      if (resilient) {
+        try {
+          statements.push(this.parseStatement());
+        } catch (e: any) {
+          this.synchronize();
+          if (this.isAtEnd()) break;
+        }
+      } else {
+        statements.push(this.parseStatement());
+      }
     }
     return { statements };
+  }
+
+  private synchronize(): void {
+    if (this.isAtEnd()) return;
+    this.advance();
+
+    while (!this.isAtEnd()) {
+      const prev = this.previous();
+      if (prev.type === 'SYMBOL' && prev.value === ';') return;
+
+      const peekType = this.peek().type;
+      const peekVal = this.peek().value;
+
+      if (peekType === 'KEYWORD') {
+        switch (peekVal) {
+          case 'let':
+          case 'function':
+          case 'type':
+          case 'module':
+          case 'import':
+          case 'export':
+          case 'match':
+          case 'if':
+          case 'for':
+          case 'while':
+          case 'return':
+            return;
+        }
+      }
+
+      this.advance();
+    }
   }
 
   // ==================== HELPER METHODS ====================

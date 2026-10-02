@@ -473,9 +473,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             }
           };
         } else {
+          onFileSelectRef.current(targetFile.fileId);
+          
+          const localLine = defLoc.line - targetFile.startLine + 1;
+          
           setTimeout(() => {
-            onFileSelectRef.current(targetFile.fileId);
-          }, 0);
+            if (editorRef.current) {
+              editorRef.current.revealPositionInCenter({ lineNumber: localLine, column: defLoc.col });
+              editorRef.current.setPosition({ lineNumber: localLine, column: defLoc.col });
+              editorRef.current.focus();
+            }
+          }, 80);
           return null;
         }
       }
