@@ -1,0 +1,6 @@
+{
+  "name": "TypeLang Playground",
+  "description": "Interactive Language Playground and Compiler with GADTs, Higher-Order Types (HKTs), and Full LSP",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

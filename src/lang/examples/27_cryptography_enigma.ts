@@ -1,0 +1,228 @@
+import { ExampleProgram } from "./types";
+
+export const example27CryptographyEnigma: ExampleProgram = {
+    id: "27",
+    name: "27. Cryptography Lab: Enigma Machine Simulator",
+    title: "27. Cryptography Lab: Enigma Machine Simulator",
+    category: "Cryptography & Security",
+    description: "A functional simulation of the WWII Enigma cipher machine.",
+    code: `import DOM.{ h, mount }
+import String.{ parseInt }
+
+let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+function getCharIndex(char: string): number {
+  let mut res = -1
+  for (let mut i = 0; i < 26; i = i + 1) {
+    if (alphabet[i] == char) {
+      if (res == -1) res = i
+    }
+  }
+  res
+}
+
+function getChar(index: number): string {
+  let mut i = index
+  while (i < 0) { i = i + 26 }
+  while (i >= 26) { i = i - 26 }
+  alphabet[i]
+}
+
+// Historical Enigma I Wiring
+let rotor1_wiring = "EKMFLGDQVZNTOWYHXUSPAIBRCJ" // I
+let rotor2_wiring = "AJDKSIRUXBLHWTMCQGZNPYFVOE" // II
+let rotor3_wiring = "BDFHJLCPRTXVZNYEIWGAKMUSQO" // III
+let reflector_wiring = "YRUHQSLDPXNGOKMIEBFZCWVJAT" // Reflector B
+
+// Notches: I=Q(16), II=E(4), III=V(21)
+let notches = [16, 4, 21]
+
+let mut initialPositions = [0, 0, 0]
+let mut currentPositions = [0, 0, 0]
+let mut activePath: number[] = [] 
+
+let mut inputText = "HELLOWORLD"
+let mut outputText = ""
+
+function toUpper(str: string): string {
+  let lower = "abcdefghijklmnopqrstuvwxyz"
+  let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  let mut res = ""
+  for (let mut i = 0; i < str.length; i = i + 1) {
+    let mut c = str[i]
+    let mut found = false
+    for (let mut j = 0; j < 26; j = j + 1) {
+      if (lower[j] == c) {
+        res = concat(res, upper[j])
+        found = true
+      }
+    }
+    if (found == false) {
+      res = concat(res, c)
+    }
+  }
+  res
+}
+
+function stepRotors() {
+  currentPositions[2] = currentPositions[2] + 1
+  if (currentPositions[2] >= 26) {
+    currentPositions[2] = 0
+  }
+  
+  if (currentPositions[2] == notches[2]) {
+    currentPositions[1] = currentPositions[1] + 1
+    if (currentPositions[1] >= 26) {
+      currentPositions[1] = 0
+    }
+    
+    if (currentPositions[1] == notches[1]) {
+      currentPositions[0] = currentPositions[0] + 1
+      if (currentPositions[0] >= 26) {
+        currentPositions[0] = 0
+      }
+    }
+  }
+}
+
+function passRotorForward(c: number, rIdx: number, wiring: string): number {
+  let pos = currentPositions[rIdx]
+  let offsetChar = getChar(c + pos)
+  let wIdx = getCharIndex(offsetChar)
+  let mappedChar = wiring[wIdx]
+  let mIdx = getCharIndex(mappedChar)
+  getCharIndex(getChar(mIdx - pos))
+}
+
+function passReflector(c: number, wiring: string): number {
+  let wChar = wiring[c]
+  getCharIndex(wChar)
+}
+
+function passRotorBackward(c: number, rIdx: number, wiring: string): number {
+  let pos = currentPositions[rIdx]
+  let offsetChar = getChar(c + pos)
+  
+  let mut wIdx = -1
+  for (let mut i = 0; i < 26; i = i + 1) {
+    if (wiring[i] == offsetChar) {
+      wIdx = i
+    }
+  }
+  
+  getCharIndex(getChar(wIdx - pos))
+}
+
+function encryptChar(c: string): string {
+  let idx = getCharIndex(c)
+  let mut ret = c
+  if (idx != -1) {
+    stepRotors()
+    
+    let mut curr = idx
+    activePath = [curr]
+    
+    curr = passRotorForward(curr, 2, rotor3_wiring)
+    curr = passRotorForward(curr, 1, rotor2_wiring)
+    curr = passRotorForward(curr, 0, rotor1_wiring)
+    
+    curr = passReflector(curr, reflector_wiring)
+    
+    curr = passRotorBackward(curr, 0, rotor1_wiring)
+    curr = passRotorBackward(curr, 1, rotor2_wiring)
+    curr = passRotorBackward(curr, 2, rotor3_wiring)
+    
+    ret = getChar(curr)
+  }
+  ret
+}
+
+function processText() {
+  currentPositions = [initialPositions[0], initialPositions[1], initialPositions[2]]
+  let cleanInput = toUpper(inputText)
+  let mut out = ""
+  for (let mut i = 0; i < cleanInput.length; i = i + 1) {
+    let encrypted = encryptChar(cleanInput[i])
+    out = concat(out, encrypted)
+  }
+  outputText = out
+  renderUI()
+}
+
+function renderUI() {
+  let vnode = h("div", { className: "min-h-[500px] bg-slate-950 p-6 flex flex-col font-sans text-slate-200" }, [
+    h("div", { className: "max-w-4xl w-full space-y-6" }, [
+      
+      h("div", { className: "flex items-center justify-between" }, [
+        h("div", {}, [
+          h("h1", { className: "text-2xl font-bold text-amber-500 flex items-center gap-2" }, "ENIGMA I SIMULATOR"),
+          h("p", { className: "text-slate-400 text-sm mt-1" }, "Functional Cryptography Lab (Rotors I, II, III & Reflector B)")
+        ])
+      ]),
+
+      h("div", { className: "bg-slate-900/80 p-4 rounded-2xl border border-slate-800 space-y-4" }, [
+        h("div", { className: "text-xs font-bold uppercase text-slate-500 tracking-wider" }, "Rotor Initial Settings (0-25)"),
+        h("div", { className: "flex gap-6 justify-center items-center py-4 bg-slate-950 rounded-xl border border-slate-800" }, [
+          h("div", { className: "flex flex-col items-center gap-2" }, [
+            h("span", { className: "text-xs font-mono text-slate-500" }, "Rotor I"),
+            h("input", { 
+              type: "number", min: "0", max: "25", value: to_string(initialPositions[0]),
+              className: "w-16 bg-slate-900 border border-slate-700 text-center rounded-lg text-lg text-amber-400 font-mono py-1 focus:outline-none focus:border-amber-500",
+              onInput: fn(e: any) { initialPositions[0] = parseInt(e.target.value); processText() }
+            }, "")
+          ]),
+          h("div", { className: "flex flex-col items-center gap-2" }, [
+            h("span", { className: "text-xs font-mono text-slate-500" }, "Rotor II"),
+            h("input", { 
+              type: "number", min: "0", max: "25", value: to_string(initialPositions[1]),
+              className: "w-16 bg-slate-900 border border-slate-700 text-center rounded-lg text-lg text-amber-400 font-mono py-1 focus:outline-none focus:border-amber-500",
+              onInput: fn(e: any) { initialPositions[1] = parseInt(e.target.value); processText() }
+            }, "")
+          ]),
+          h("div", { className: "flex flex-col items-center gap-2" }, [
+            h("span", { className: "text-xs font-mono text-slate-500" }, "Rotor III"),
+            h("input", { 
+              type: "number", min: "0", max: "25", value: to_string(initialPositions[2]),
+              className: "w-16 bg-slate-900 border border-slate-700 text-center rounded-lg text-lg text-amber-400 font-mono py-1 focus:outline-none focus:border-amber-500",
+              onInput: fn(e: any) { initialPositions[2] = parseInt(e.target.value); processText() }
+            }, "")
+          ])
+        ])
+      ]),
+
+      h("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-4" }, [
+        h("div", { className: "bg-slate-900/80 p-4 rounded-2xl border border-slate-800 space-y-2" }, [
+          h("div", { className: "text-xs font-bold uppercase text-slate-500 tracking-wider" }, "Plaintext Input"),
+          h("textarea", {
+            value: inputText,
+            className: "w-full h-32 bg-slate-950 border border-slate-700 rounded-xl p-3 text-slate-300 font-mono text-lg focus:outline-none focus:border-cyan-500 resize-none uppercase",
+            placeholder: "TYPE MESSAGE HERE...",
+            onInput: fn(e: any) { inputText = toUpper(e.target.value); processText() }
+          }, "")
+        ]),
+        h("div", { className: "bg-slate-900/80 p-4 rounded-2xl border border-emerald-900/50 space-y-2 relative overflow-hidden" }, [
+          h("div", { className: "absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl" }, ""),
+          h("div", { className: "text-xs font-bold uppercase text-emerald-600 tracking-wider" }, "Ciphertext Output"),
+          h("div", { className: "w-full h-32 bg-slate-950 border border-emerald-900/50 rounded-xl p-3 text-emerald-400 font-mono text-lg overflow-y-auto break-all shadow-inner shadow-black" }, 
+            outputText.length > 0 ? outputText : "..."
+          )
+        ])
+      ]),
+
+      h("div", { className: "bg-slate-900/80 p-4 rounded-2xl border border-slate-800 space-y-3" }, [
+        h("div", { className: "text-xs font-bold uppercase text-slate-500 tracking-wider" }, "Current Rotor State"),
+        h("div", { className: "flex justify-around items-center bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-lg" }, [
+          h("div", { className: "text-cyan-400" }, concat("I: ", getChar(currentPositions[0]))),
+          h("div", { className: "text-cyan-400" }, concat("II: ", getChar(currentPositions[1]))),
+          h("div", { className: "text-cyan-400" }, concat("III: ", getChar(currentPositions[2])))
+        ])
+      ])
+    ])
+  ])
+  mount("app-root", vnode)
+}
+
+processText()
+println("Enigma Machine Simulator Initialized!")
+`
+  };

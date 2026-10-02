@@ -1,0 +1,135 @@
+import DOM.{ h, mount }
+import Math.{ floor, random }
+import String.{ parseInt }
+
+let mut grid: number[] = []
+let mut initialMask: boolean[] = [] 
+let mut selectedIdx: number = -1
+
+let mut solving: boolean = false
+let mut solvingSpeed: number = 20
+
+function handleInput(val: number) {}
+function generatePuzzle() {}
+function clearUserInputs() {}
+function startSolver() {}
+function stopSolver() {}
+let mut solverCurrentCell = -1
+
+function renderUI() {
+  let mut cells: any[] = []
+  
+  for (let mut i = 0; i < 81; i = i + 1) {
+    let r = floor(i / 9)
+    let c = i - r * 9
+    
+    let isSelected = i == selectedIdx
+    let isSolverActive = i == solverCurrentCell
+    let isFixed = initialMask[i]
+    let val = grid[i]
+    
+    let mut borderClasses = "border border-slate-700/50 "
+    if (c == 2 || c == 5) { borderClasses = concat(borderClasses, "border-r-amber-500/50 border-r-2 ") }
+    if (r == 2 || r == 5) { borderClasses = concat(borderClasses, "border-b-amber-500/50 border-b-2 ") }
+    if (c == 0) { borderClasses = concat(borderClasses, "border-l-amber-500/50 border-l-2 ") }
+    if (r == 0) { borderClasses = concat(borderClasses, "border-t-amber-500/50 border-t-2 ") }
+    if (c == 8) { borderClasses = concat(borderClasses, "border-r-amber-500/50 border-r-2 ") }
+    if (r == 8) { borderClasses = concat(borderClasses, "border-b-amber-500/50 border-b-2 ") }
+    
+    let mut bgClass = "bg-slate-900 "
+    if (isSelected) { bgClass = "bg-cyan-900/50 " }
+    if (isSolverActive) { bgClass = "bg-emerald-600/50 " }
+    
+    let mut textClass = "text-transparent "
+    if (val != 0) {
+      if (isFixed) { textClass = "text-slate-200 font-bold " }
+      else { textClass = "text-cyan-400 font-bold " }
+    }
+    
+    let cellNode = h("div", {
+      key: to_string(i),
+      className: concat(concat(concat("w-10 h-10 md:w-12 md:h-12 flex items-center justify-center text-lg md:text-xl cursor-pointer transition-colors ", borderClasses), bgClass), textClass),
+      onClick: fn() {
+        if (solving == false) {
+          selectedIdx = i
+          renderUI()
+        }
+      }
+    }, val == 0 ? "" : to_string(val))
+    
+    cells.push(cellNode)
+  }
+  
+  let mut numpad: any[] = []
+  for (let mut n = 1; n <= 9; n = n + 1) {
+    let capturedN = n
+    numpad.push(h("button", {
+      key: concat("num", to_string(capturedN)),
+      className: "w-10 h-10 md:w-12 md:h-12 bg-slate-800 hover:bg-slate-700 text-cyan-400 font-bold rounded-xl border border-slate-700",
+      onClick: fn() { handleInput(capturedN) }
+    }, to_string(capturedN)))
+  }
+  numpad.push(h("button", {
+    key: "num0",
+    className: "w-10 h-10 md:w-12 md:h-12 bg-slate-800 hover:bg-red-900/50 text-red-400 font-bold rounded-xl border border-slate-700",
+    onClick: fn() { handleInput(0) }
+  }, "X"))
+  
+  let vnode = h("div", { className: "min-h-[500px] bg-slate-950 p-6 flex flex-col font-sans text-slate-200 items-center" }, [
+    h("div", { className: "max-w-3xl w-full space-y-8" }, [
+      h("div", { className: "text-center space-y-2" }, [
+        h("h1", { className: "text-3xl font-bold text-amber-500 tracking-wider" }, "SUDOKU LAB"),
+        h("p", { className: "text-slate-400 text-sm" }, "Recursive Backtracking Visualizer")
+      ]),
+      
+      h("div", { className: "flex flex-col md:flex-row gap-8 justify-center items-center md:items-start" }, [
+        h("div", { className: "grid grid-cols-9 bg-slate-950 rounded-xl overflow-hidden shadow-2xl shadow-black/50" }, cells),
+        
+        h("div", { className: "flex flex-col gap-6 w-full md:w-64" }, [
+          h("div", { className: "bg-slate-900/80 p-4 rounded-2xl border border-slate-800 space-y-3" }, [
+            h("div", { className: "text-xs font-bold uppercase text-slate-500 tracking-wider" }, "Player Controls"),
+            h("div", { className: "grid grid-cols-5 gap-2" }, numpad),
+            h("div", { className: "flex gap-2 pt-2" }, [
+              h("button", { 
+                className: "flex-1 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-xl font-bold text-xs uppercase hover:bg-indigo-600/40 transition-colors",
+                onClick: fn() { generatePuzzle() }
+              }, "New Puzzle"),
+              h("button", { 
+                className: "flex-1 py-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl font-bold text-xs uppercase hover:bg-red-500/40 transition-colors",
+                onClick: fn() { clearUserInputs() }
+              }, "Clear")
+            ])
+          ]),
+          
+          h("div", { className: "bg-slate-900/80 p-4 rounded-2xl border border-slate-800 space-y-4" }, [
+            h("div", { className: "text-xs font-bold uppercase text-slate-500 tracking-wider" }, "Solver Engine"),
+            h("div", { className: "space-y-2" }, [
+              h("div", { className: "flex justify-between text-xs font-mono text-slate-400" }, [
+                h("span", {}, "Speed (ms)"),
+                h("span", { className: "text-amber-400" }, solvingSpeed == 0 ? "INSTANT" : to_string(solvingSpeed))
+              ]),
+              h("input", {
+                type: "range", min: "0", max: "200", step: "10", value: to_string(solvingSpeed),
+                className: "w-full accent-amber-500",
+                onInput: fn(e: any) { solvingSpeed = parseInt(e.target.value); renderUI() }
+              }, "")
+            ]),
+            h("div", { className: "flex gap-2" }, [
+              solving ? 
+              h("button", { 
+                className: "flex-1 py-3 bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl font-bold text-xs uppercase hover:bg-red-500/40 transition-colors",
+                onClick: fn() { stopSolver() }
+              }, "Stop Engine")
+              :
+              h("button", { 
+                className: "flex-1 py-3 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-xs uppercase hover:bg-emerald-500/40 transition-colors shadow-lg shadow-emerald-900/20",
+                onClick: fn() { startSolver() }
+              }, "Start Auto-Solve")
+            ])
+          ])
+        ])
+      ])
+    ])
+  ])
+  mount("app-root", vnode)
+}
