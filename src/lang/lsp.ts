@@ -568,6 +568,32 @@ export function findMatchingSymbol(
 }
 
 /**
+ * Resolve a reference symbol back to its definition symbol to inherit documentation and signatures.
+ */
+export function resolveReferenceSymbol(matchedSymbol: ScopeSymbol, symbols: ScopeSymbol[]): ScopeSymbol {
+  if (matchedSymbol.kind === 'reference' && matchedSymbol.scopeRange) {
+    const defSymbol = symbols.find(s =>
+      s.name === matchedSymbol.name &&
+      s.kind !== 'reference' &&
+      s.loc &&
+      s.loc.line === matchedSymbol.scopeRange!.startLine &&
+      s.loc.col === matchedSymbol.scopeRange!.startCol
+    );
+    if (defSymbol) {
+      return {
+        ...matchedSymbol,
+        kind: defSymbol.kind,
+        doc: defSymbol.doc || matchedSymbol.doc,
+        isExported: defSymbol.isExported,
+        containerName: defSymbol.containerName,
+        type: defSymbol.type || matchedSymbol.type,
+      };
+    }
+  }
+  return matchedSymbol;
+}
+
+/**
  * Language Server Protocol (LSP) Mock Hover Provider
  * Analyzes source code and returns type hover information for any symbol.
  */
@@ -652,8 +678,9 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
     }
 
     // Search in registered scoped symbols (function parameters, local variables, lambdas, patterns, etc.)
-    const matchedSymbol = findMatchingSymbol(checker.symbols, word, line, col);
+    let matchedSymbol = findMatchingSymbol(checker.symbols, word, line, col);
     if (matchedSymbol) {
+      matchedSymbol = resolveReferenceSymbol(matchedSymbol, checker.symbols);
       if (matchedSymbol.kind === 'gadt' && env.gadts.has(word)) {
         appendGadtHover(contents, env.gadts.get(word)!);
         if (matchedSymbol.doc) contents.push(matchedSymbol.doc);
@@ -1065,8 +1092,9 @@ export function inspectTypeAtPosition(
     const checker = new TypeChecker();
     checker.checkProgram(ast);
 
-    const matchedSymbol = findMatchingSymbol(checker.symbols, word, line, col);
+    let matchedSymbol = findMatchingSymbol(checker.symbols, word, line, col);
     if (matchedSymbol) {
+      matchedSymbol = resolveReferenceSymbol(matchedSymbol, checker.symbols);
       const extracted = extractTypeDetails(matchedSymbol.type);
       const isParam = matchedSymbol.kind === 'parameter';
       const isPattern = matchedSymbol.kind === 'pattern';
