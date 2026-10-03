@@ -3006,7 +3006,7 @@ export function createInitialEnv(): TypeEnv {
 
   for (const [name] of env.vars) {
     const doc = getRootBuiltinDoc(name);
-    if (doc) env.docs.set(name, doc);
+    if (doc) env.docs?.set(name, doc);
   }
 
   for (const [moduleName, moduleEnv] of env.modules) {

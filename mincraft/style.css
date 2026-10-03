@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+:root {
+  color-scheme: dark;
+  --ink: #e9eadb;
+  --muted: #929a8d;
+  --line: rgba(216, 222, 199, .14);
+  --green: #9ab783;
+  --page: #171d1a;
+  --panel: #202823;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background: radial-gradient(ellipse at 50% -18%, #354338 0, #1d2822 34%, var(--page) 74%);
+  font-family: 'DM Sans', sans-serif;
+}
+.shell { width: min(1080px, calc(100% - 48px)); margin: 0 auto; }
+.masthead { height: 86px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+.brand { display: flex; align-items: center; gap: 12px; color: var(--ink); text-decoration: none; }
+.brand > span:last-child { display: grid; gap: 3px; }
+.brand strong { font: 700 15px 'Space Grotesk', sans-serif; letter-spacing: .12em; }
+.brand small, .eyebrow, .build-tag, .world-stamp, .frame-topline, .frame-caption, footer, .number, kbd { font-family: 'DM Mono', monospace; }
+.brand small { color: #a0a896; letter-spacing: .16em; font-size: 9px; }
+.brand-mark { width: 34px; height: 34px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; transform: rotate(-3deg); background: #70866a; }
+.brand-mark i { background: #c9b778; }
+.brand-mark i:nth-child(2), .brand-mark i:nth-child(3) { background: #415d48; }
+.build-tag { color: #b9c2b4; font-size: 10px; letter-spacing: .09em; display: flex; align-items: center; gap: 9px; }
+.build-tag b { color: #e7d4a0; font-weight: 400; margin-left: 4px; }
+.live-dot { width: 7px; height: 7px; background: #a7c98a; border-radius: 50%; box-shadow: 0 0 10px #a7c98a80; }
+.intro { display: flex; justify-content: space-between; align-items: end; padding: 45px 4px 28px; }
+.eyebrow { color: var(--green); font-size: 10px; letter-spacing: .17em; margin: 0 0 13px; }
+h1 { margin: 0; font: 600 clamp(38px, 5.3vw, 61px)/.99 'Space Grotesk', sans-serif; letter-spacing: -.055em; }
+h1 em { color: #b8c795; font-style: normal; }
+.lede { max-width: 520px; margin: 16px 0 0; color: #aab1a5; font-size: 14px; line-height: 1.65; }
+.world-stamp { border: 1px solid var(--line); min-width: 154px; padding: 13px 16px; display: grid; gap: 5px; color: #98a394; font-size: 9px; letter-spacing: .11em; }
+.world-stamp strong { color: #ead8a5; font: 500 21px 'Space Grotesk', sans-serif; letter-spacing: .02em; }
+.world-stamp small { font-size: 8px; }
+.game-frame { background: #171c19; border: 1px solid rgba(201, 213, 182, .24); padding: 10px; box-shadow: 0 22px 70px #080c0a70, inset 0 1px #ffffff08; }
+.frame-topline, .frame-caption { height: 27px; display: flex; align-items: center; justify-content: space-between; color: #99a393; font-size: 9px; letter-spacing: .13em; padding: 0 8px; }
+.frame-topline span:first-child { display: flex; gap: 8px; align-items: center; }
+.frame-topline i { width: 6px; height: 6px; border-radius: 50%; background: #b6c88c; }
+.canvas-wrap { position: relative; line-height: 0; overflow: hidden; background: #263a4c; border: 1px solid #536252; }
+canvas { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; image-rendering: pixelated; image-rendering: crisp-edges; cursor: crosshair; outline: none; }
+.corner-label { position: absolute; bottom: 10px; right: 12px; color: #e9efd0a0; font: 9px 'DM Mono', monospace; letter-spacing: .15em; }
+.frame-caption { height: 28px; color: #8d998b; font-size: 8px; }
+.frame-caption b { color: #b4be9e; padding: 0 4px; }
+.mono { font-family: 'DM Mono', monospace; }
+.below-game { display: grid; grid-template-columns: 1.12fr .88fr; gap: 14px; margin-top: 15px; }
+.controls-card, .journal-card { border: 1px solid var(--line); background: linear-gradient(145deg, #252e28, #1e2621); padding: 19px 21px; }
+.section-heading { display: flex; gap: 11px; align-items: center; margin-bottom: 16px; }
+.number { color: #aabf8e; font-size: 10px; }
+h2 { margin: 0; font: 600 16px 'Space Grotesk', sans-serif; letter-spacing: -.02em; }
+.control-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 15px; row-gap: 12px; }
+.control { display: flex; align-items: center; gap: 9px; color: #adb5a9; font-size: 11px; }
+kbd { white-space: nowrap; color: #e2d8b6; font-size: 8px; border: 1px solid #65715e; background: #333d34; padding: 4px 6px; min-width: 53px; text-align: center; }
+.journal-card p { color: #aab1a5; font-size: 12px; line-height: 1.68; margin: 0 0 14px; }
+.journal-tip { display: flex; gap: 10px; align-items: start; color: #c5cbb8; border-top: 1px solid var(--line); padding-top: 12px; font-size: 10px; line-height: 1.55; }
+.journal-tip b { color: #e8d7a6; }
+.tip-icon { color: #d6bf7c; font-size: 16px; }
+footer { display: flex; justify-content: space-between; padding: 24px 2px 30px; color: #778176; font-size: 8px; letter-spacing: .13em; }
+@media (max-width: 700px) {
+  .shell { width: min(100% - 24px, 560px); }
+  .masthead { height: 68px; }
+  .build-tag { font-size: 8px; gap: 6px; }
+  .intro { padding: 35px 1px 20px; }
+  .world-stamp { display: none; }
+  .lede { font-size: 12px; }
+  .game-frame { padding: 6px; }
+  .below-game { grid-template-columns: 1fr; }
+  .controls-card, .journal-card { padding: 16px; }
+  .frame-caption { font-size: 7px; }
+  footer { font-size: 7px; gap: 12px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .game-frame { animation: arrive .7s ease-out both; }
+  @keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+}

@@ -9,7 +9,9 @@
     "test": "tsx scripts/test_all.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "mincraft:build": "tsx scripts/build_mincraft.ts",
+    "mincraft:serve": "node mincraft/serve.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

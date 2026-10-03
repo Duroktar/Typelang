@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#151b19" />
+    <meta name="description" content="Mincraft — a first-person voxel survival sandbox written in TypeLang." />
+    <title>Mincraft — a TypeLang voxel world</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="brand" href="#" aria-label="Mincraft home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span><strong>MINCRAFT</strong><small>FIELD NOTES · 01</small></span>
+        </a>
+        <div class="build-tag"><span class="live-dot"></span> SURVIVAL BUILD <b>0.1.0</b></div>
+      </header>
+
+      <section class="intro">
+        <div>
+          <p class="eyebrow">A LITTLE WORLD, WRITTEN IN TYPELANG</p>
+          <h1>Find your footing.<br /><em>Make it yours.</em></h1>
+          <p class="lede">A tiny first-person voxel sandbox. Wander the hills, gather what you need, and be home before the forest gets dark.</p>
+        </div>
+        <div class="world-stamp" aria-label="Generated world details">
+          <span>WORLD</span><strong>№ 048</strong><small>48 × 48 · PROCEDURAL</small>
+        </div>
+      </section>
+
+      <section class="game-frame" aria-label="Mincraft game">
+        <div class="frame-topline"><span><i></i> FIELD VIEW</span><span>DAYLIGHT / BUILD 01</span></div>
+        <div class="canvas-wrap">
+          <canvas id="world" aria-label="Mincraft voxel world. Click to begin, then use WASD and drag to look." tabindex="0"></canvas>
+          <div class="corner-label">TYP / 001</div>
+        </div>
+        <div class="frame-caption">
+          <span>PROCEDURAL HILLS <b>·</b> NIGHT CYCLE <b>·</b> SURVIVAL</span>
+          <span class="mono">ENGINE: TYPELANG</span>
+        </div>
+      </section>
+
+      <section class="below-game">
+        <div class="controls-card">
+          <div class="section-heading"><span class="number">01</span><h2>Field controls</h2></div>
+          <div class="control-grid">
+            <div class="control"><kbd>W A S D</kbd><span>Move around</span></div>
+            <div class="control"><kbd>DRAG</kbd><span>Look around</span></div>
+            <div class="control"><kbd>CLICK</kbd><span>Mine a block</span></div>
+            <div class="control"><kbd>RIGHT CLICK</kbd><span>Place a block</span></div>
+            <div class="control"><kbd>1 — 8</kbd><span>Choose hotbar slot</span></div>
+            <div class="control"><kbd>WHEEL</kbd><span>Scroll hotbar slots</span></div>
+            <div class="control"><kbd>E</kbd><span>Inventory & crafting</span></div>
+            <div class="control"><kbd>SPACE</kbd><span>Jump</span></div>
+            <div class="control"><kbd>Q</kbd><span>Swing your sword</span></div>
+            <div class="control"><kbd>F</kbd><span>Eat an apple</span></div>
+            <div class="control"><kbd>F3</kbd><span>Coordinates & debug</span></div>
+            <div class="control"><kbd>ESC</kbd><span>Pause / close kit</span></div>
+          </div>
+        </div>
+        <aside class="journal-card">
+          <div class="section-heading"><span class="number">02</span><h2>Field journal</h2></div>
+          <p>Oak leaves sometimes hide apples. A workbench turns logs into the tools you need. When the light goes, keep moving—or make a stand.</p>
+          <div class="journal-tip"><span class="tip-icon">✳</span><span><b>First night?</b> Craft a wooden sword and keep an eye on the horizon.</span></div>
+        </aside>
+      </section>
+
+      <footer><span>AN EXPERIMENT IN TYPELANG</span><span>GROW A WORLD. ONE BLOCK AT A TIME.</span></footer>
+    </main>
+    <script src="./main.js"></script>
+  </body>
+</html>

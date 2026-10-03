@@ -1,0 +1,1002 @@
+// MINCRAFT — a tiny first-person voxel survival sandbox, written in TypeLang.
+// All simulation, world generation, input and rendering below are TypeLang.
+
+import DOM.{ getElementById }
+
+type GamePhase = Title | Playing | Inventory | Paused | Dead
+
+type Mob = {
+  mut x: number,
+  mut z: number,
+  kind: number,
+  mut hp: number,
+  mut wander: number,
+  mut attack: number
+}
+
+let SCREEN_W = 480
+let SCREEN_H = 300
+let WORLD_W = 48
+let WORLD_D = 48
+let WORLD_H = 14
+let RENDER_COLUMNS = 180
+let FOV = 1.12
+let MAX_REACH = 5.2
+let BLOCK_NAMES = ["Air", "Grass", "Dirt", "Stone", "Sand", "Oak Log", "Leaves", "Water", "Coal Ore", "Planks", "Workbench", "Torch", "Wood Pick", "Wood Sword", "Stick", "Wool", "Apple"]
+let BLOCK_COLORS = ["#000000", "#70a83b", "#85613c", "#777a7e", "#d8c27a", "#79512e", "#4e883b", "#397cbd", "#35373a", "#b88752", "#9a6738", "#f3b84b", "#b78b52", "#bd7c4a", "#ab764f", "#ded7c8", "#dc4c36"]
+let HOTBAR = [1, 2, 3, 4, 5, 6, 9, 10]
+let WORLD_SIZE = WORLD_W * WORLD_D * WORLD_H
+
+let canvas = getElementById("world")
+let ctx = canvas.getContext("2d")
+canvas.width = SCREEN_W
+canvas.height = SCREEN_H
+
+let mut world: number[] = []
+let mut heights: number[] = []
+let mut inventory: number[] = []
+let mut mobs: Mob[] = []
+let mut phase: GamePhase = Title
+let mut seed = 918273
+let mut playerX = 24.5
+let mut playerZ = 24.5
+let mut playerYaw = 0.3
+let mut playerPitch = 0.0
+let mut playerGround = 4
+let mut playerEyeHeight = 1.62
+let mut playerHealth = 10
+let mut playerHunger = 10
+let mut selected = 0
+let mut dayClock = 0.18
+let mut scoreMined = 0
+let mut jumpOffset = 0.0
+let mut jumpVelocity = 0.0
+let mut lastFrame = 0.0
+let mut lastMove = 0.0
+let mut message = "Click to enter the world"
+let mut messageTime = 0.0
+let mut showDebug = false
+let mut keys: string[] = []
+let mut targetX = -1
+let mut targetZ = -1
+let mut targetBlock = 0
+let mut hitDistance = 0.0
+let mut mouseDown = false
+let mut lookDragging = false
+let mut lastMouseX = 0.0
+let mut lastMouseY = 0.0
+let mut craftScroll = 0
+
+function worldIndex(x: number, z: number, y: number): number {
+  (x * WORLD_D + z) * WORLD_H + y
+}
+
+function columnIndex(x: number, z: number): number {
+  x * WORLD_D + z
+}
+
+function random01(): number {
+  seed = (seed * 16807) % 2147483647
+  seed / 2147483647
+}
+
+function inBounds(x: number, z: number, y: number): boolean {
+  x >= 0 && x < WORLD_W && z >= 0 && z < WORLD_D && y >= 0 && y < WORLD_H
+}
+
+function getBlock(x: number, z: number, y: number): number {
+  if (!inBounds(x, z, y)) { return 0 }
+  world[worldIndex(x, z, y)]
+}
+
+function setBlock(x: number, z: number, y: number, block: number) {
+  if (!inBounds(x, z, y)) { return }
+  world[worldIndex(x, z, y)] = block
+  if (block != 0 && y > heights[columnIndex(x, z)]) {
+    heights[columnIndex(x, z)] = y
+  }
+  if (block == 0 && y == heights[columnIndex(x, z)]) {
+    let mut top = y - 1
+    while (top >= 0 && getBlock(x, z, top) == 0) { top = top - 1 }
+    heights[columnIndex(x, z)] = top
+  }
+}
+
+function terrainHeight(x: number, z: number): number {
+  let wave = Math.sin(x * 0.34) * 1.25 + Math.cos(z * 0.27) * 1.1 + Math.sin((x + z) * 0.17) * 0.9
+  let hill = Math.sin(x * 0.11 + z * 0.09) * 1.5
+  Math.floor(4 + wave + hill)
+}
+
+function showMessage(text: string) {
+  message = text
+  messageTime = 2.6
+}
+
+function phaseLabel(): string {
+  match (phase) {
+    Title => "title"
+    Playing => "exploring"
+    Inventory => "inventory"
+    Paused => "paused"
+    Dead => "fallen"
+  }
+}
+
+function generateWorld() {
+  world = []
+  heights = []
+  for (let mut i = 0; i < WORLD_SIZE; i = i + 1) { world.push(0) }
+  for (let mut i = 0; i < WORLD_W * WORLD_D; i = i + 1) { heights.push(0) }
+
+  // Layered hills, beaches, a shallow lake, and deep stone strata.
+  for (let mut x = 0; x < WORLD_W; x = x + 1) {
+    for (let mut z = 0; z < WORLD_D; z = z + 1) {
+      let mut h = terrainHeight(x, z)
+      if (h < 2) { h = 2 }
+      if (h > WORLD_H - 5) { h = WORLD_H - 5 }
+      let beach = h <= 3
+      for (let mut y = 0; y <= h; y = y + 1) {
+        let mut block = 3
+        if (y == 0) { block = 3 }
+        else if (y == h && beach) { block = 4 }
+        else if (y == h) { block = 1 }
+        else if (y >= h - 2) { block = 2 }
+        if (x > 15 && x < 22 && z > 15 && z < 22 && y == h) { block = 7 }
+        setBlock(x, z, y, block)
+      }
+      if (h < 3 && !(x > 15 && x < 22 && z > 15 && z < 22)) {
+        setBlock(x, z, h, 4)
+      }
+    }
+  }
+
+  // Clusters of oaks: 3D log trunks and leaf canopies.
+  for (let mut x = 2; x < WORLD_W - 2; x = x + 1) {
+    for (let mut z = 2; z < WORLD_D - 2; z = z + 1) {
+      let chance = random01()
+      let ground = heights[columnIndex(x, z)]
+      let safeSpawn = Math.abs(x - 24) + Math.abs(z - 24) < 5
+      if (chance > 0.982 && !safeSpawn && ground > 3 && ground < WORLD_H - 5) {
+        let trunk = 3 + Math.floor(random01() * 2)
+        for (let mut ty = 1; ty <= trunk; ty = ty + 1) { setBlock(x, z, ground + ty, 5) }
+        let crownY = ground + trunk
+        for (let mut dx = -2; dx <= 2; dx = dx + 1) {
+          for (let mut dz = -2; dz <= 2; dz = dz + 1) {
+            for (let mut dy = 0; dy <= 2; dy = dy + 1) {
+              if (Math.abs(dx) + Math.abs(dz) + dy < 5 && getBlock(x + dx, z + dz, crownY + dy) == 0) {
+                setBlock(x + dx, z + dz, crownY + dy, 6)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Coal seams tucked just beneath the surface.
+  for (let mut x = 2; x < WORLD_W - 2; x = x + 1) {
+    for (let mut z = 2; z < WORLD_D - 2; z = z + 1) {
+      if (random01() > 0.987) {
+        let y = heights[columnIndex(x, z)] - 2
+        if (y > 1) { setBlock(x, z, y, 8) }
+      }
+    }
+  }
+
+  playerGround = heights[columnIndex(24, 24)]
+}
+
+function resetInventory() {
+  inventory = []
+  for (let mut i = 0; i < 17; i = i + 1) { inventory.push(0) }
+  inventory[1] = 8
+  inventory[2] = 8
+  inventory[3] = 4
+  inventory[4] = 4
+  inventory[9] = 8
+  inventory[14] = 4
+  inventory[11] = 8
+}
+
+function resetGame() {
+  seed = 918273 + Math.floor(Math.random() * 100000)
+  generateWorld()
+  resetInventory()
+  mobs = []
+  playerX = 24.5
+  playerZ = 24.5
+  playerYaw = 0.3
+  playerPitch = 0
+  playerHealth = 10
+  playerHunger = 10
+  selected = 0
+  dayClock = 0.18
+  scoreMined = 0
+  phase = Playing
+  for (let mut i = 0; i < 12; i = i + 1) {
+    let mx = 5 + Math.floor(random01() * 38)
+    let mz = 5 + Math.floor(random01() * 38)
+    let mut kind = 0
+    if (i > 6) { kind = 1 }
+    mobs.push({ x: mx + 0.5, z: mz + 0.5, kind: kind, hp: 3, wander: random01() * 6, attack: 0 })
+  }
+  showMessage("New world generated • gather, craft, survive")
+}
+
+function blockLabel(block: number): string {
+  if (block < 0 || block >= 17) { return "Unknown" }
+  BLOCK_NAMES[block]
+}
+
+function terrainAt(x: number, z: number): number {
+  let ix = Math.floor(x)
+  let iz = Math.floor(z)
+  if (ix < 0 || ix >= WORLD_W || iz < 0 || iz >= WORLD_D) { return WORLD_H - 1 }
+  heights[columnIndex(ix, iz)]
+}
+
+function terrainAround(x: number, z: number): number {
+  let radius = 0.22
+  let mut top = terrainAt(x - radius, z - radius)
+  let h1 = terrainAt(x + radius, z - radius)
+  let h2 = terrainAt(x - radius, z + radius)
+  let h3 = terrainAt(x + radius, z + radius)
+  if (h1 > top) { top = h1 }
+  if (h2 > top) { top = h2 }
+  if (h3 > top) { top = h3 }
+  top
+}
+
+function isSolidAt(x: number, z: number): boolean {
+  isSolidAtHeight(x, z, playerGround, jumpOffset)
+}
+
+function isSolidAtHeight(x: number, z: number, ground: number, offset: number): boolean {
+  if (x < 0.24 || x > WORLD_W - 0.24 || z < 0.24 || z > WORLD_D - 0.24) { return true }
+  let obstacleTop = terrainAround(x, z)
+  let mut allowedTop = ground
+  if (offset > 0.05) { allowedTop = ground + offset }
+  obstacleTop > allowedTop
+}
+
+function tryMove(dx: number, dz: number) {
+  // Resolve axes independently so diagonal input cannot tunnel through corners.
+  let nextX = playerX + dx
+  if (!isSolidAt(nextX, playerZ)) {
+    let nextGroundX = terrainAt(nextX, playerZ)
+    playerX = nextX
+    if (jumpOffset <= 0.05 && nextGroundX > playerGround && nextGroundX <= playerGround + 1) {
+      playerGround = nextGroundX
+    } else if (jumpOffset <= 0.05 && nextGroundX < playerGround && playerGround - nextGroundX <= 1) {
+      playerGround = nextGroundX
+    } else if (jumpOffset <= 0.05 && nextGroundX < playerGround - 1) {
+      jumpOffset = playerGround - nextGroundX
+      jumpVelocity = 0
+      playerGround = nextGroundX
+    }
+  }
+  let nextZ = playerZ + dz
+  if (!isSolidAt(playerX, nextZ)) {
+    let nextGroundZ = terrainAt(playerX, nextZ)
+    playerZ = nextZ
+    if (jumpOffset <= 0.05 && nextGroundZ > playerGround && nextGroundZ <= playerGround + 1) {
+      playerGround = nextGroundZ
+    } else if (jumpOffset <= 0.05 && nextGroundZ < playerGround && playerGround - nextGroundZ <= 1) {
+      playerGround = nextGroundZ
+    } else if (jumpOffset <= 0.05 && nextGroundZ < playerGround - 1) {
+      jumpOffset = playerGround - nextGroundZ
+      jumpVelocity = 0
+      playerGround = nextGroundZ
+    }
+  }
+}
+
+function traceTarget() {
+  targetX = -1
+  targetZ = -1
+  targetBlock = 0
+  hitDistance = 0
+  let rayX = Math.sin(playerYaw)
+  let rayZ = Math.cos(playerYaw)
+  for (let mut step = 1; step < 55; step = step + 1) {
+    let dist = step * 0.1
+    let x = Math.floor(playerX + rayX * dist)
+    let z = Math.floor(playerZ + rayZ * dist)
+    if (x < 0 || x >= WORLD_W || z < 0 || z >= WORLD_D) { break }
+    let mut h = heights[columnIndex(x, z)]
+    if (h >= playerGround + 1) {
+      targetX = x
+      targetZ = z
+      targetBlock = getBlock(x, z, h)
+      hitDistance = dist
+      break
+    }
+  }
+}
+
+function mineTarget() {
+  traceTarget()
+  if (targetBlock == 0 || hitDistance > MAX_REACH) { showMessage("Out of reach"); return }
+  if (targetBlock == 3 && inventory[12] == 0) { showMessage("Stone needs a pickaxe • craft one in the workbench"); return }
+  if (targetBlock == 7) { showMessage("Water cannot be mined"); return }
+  if (targetBlock == 1) {
+    inventory[2] = inventory[2] + 1
+    inventory[1] = inventory[1] + 1
+  } else if (targetBlock == 6) {
+    inventory[6] = inventory[6] + 1
+    if (random01() > 0.86) { inventory[16] = inventory[16] + 1; showMessage("An apple dropped from the leaves") }
+  } else if (targetBlock == 5) {
+    inventory[5] = inventory[5] + 1
+  } else if (targetBlock == 8) {
+    inventory[8] = inventory[8] + 1
+  } else {
+    inventory[targetBlock] = inventory[targetBlock] + 1
+  }
+  setBlock(targetX, targetZ, heights[columnIndex(targetX, targetZ)], 0)
+  scoreMined = scoreMined + 1
+  showMessage(blockLabel(targetBlock) + " mined")
+}
+
+function placeBlock() {
+  traceTarget()
+  let mut block = HOTBAR[selected]
+  if (inventory[block] <= 0) { showMessage("No " + blockLabel(block) + " in your hotbar"); return }
+  let mut px = Math.floor(playerX + Math.sin(playerYaw) * (hitDistance + 0.15))
+  let mut pz = Math.floor(playerZ + Math.cos(playerYaw) * (hitDistance + 0.15))
+  if (targetBlock == 0 || hitDistance > MAX_REACH || px < 0 || px >= WORLD_W || pz < 0 || pz >= WORLD_D) {
+    px = Math.floor(playerX + Math.sin(playerYaw) * 2)
+    pz = Math.floor(playerZ + Math.cos(playerYaw) * 2)
+  }
+  let mut h = heights[columnIndex(px, pz)]
+  if (h < 0 || h >= WORLD_H - 1) { showMessage("No room to place a block"); return }
+  if (Math.abs(px + 0.5 - playerX) < 0.7 && Math.abs(pz + 0.5 - playerZ) < 0.7 && h + 1 >= playerGround) {
+    showMessage("You cannot place a block inside yourself")
+    return
+  }
+  let putY = h + 1
+  if (getBlock(px, pz, putY) != 0) { showMessage("That space is occupied"); return }
+  setBlock(px, pz, putY, block)
+  inventory[block] = inventory[block] - 1
+  showMessage(blockLabel(block) + " placed")
+}
+
+function canCraft(recipe: number): boolean {
+  if (recipe == 0) { return inventory[5] >= 1 }
+  if (recipe == 1) { return inventory[9] >= 2 }
+  if (recipe == 2) { return inventory[9] >= 4 }
+  if (recipe == 3) { return inventory[9] >= 3 && inventory[14] >= 2 && inventory[10] > 0 }
+  if (recipe == 4) { return inventory[9] >= 2 && inventory[14] >= 1 && inventory[10] > 0 }
+  if (recipe == 5) { return inventory[8] >= 1 && inventory[14] >= 1 }
+  if (recipe == 6) { return inventory[9] >= 2 && inventory[14] >= 1 && inventory[10] > 0 }
+  false
+}
+
+function craft(recipe: number) {
+  if (!canCraft(recipe)) { showMessage("Missing ingredients • collect blocks first"); return }
+  if (recipe == 0) {
+    inventory[5] = inventory[5] - 1
+    inventory[9] = inventory[9] + 4
+    showMessage("Crafted 4 oak planks")
+  } else if (recipe == 1) {
+    inventory[9] = inventory[9] - 2
+    inventory[14] = inventory[14] + 4
+    showMessage("Crafted 4 sticks")
+  } else if (recipe == 2) {
+    inventory[9] = inventory[9] - 4
+    inventory[10] = inventory[10] + 1
+    showMessage("Crafted a workbench")
+  } else if (recipe == 3) {
+    inventory[9] = inventory[9] - 3
+    inventory[14] = inventory[14] - 2
+    inventory[12] = inventory[12] + 1
+    showMessage("Crafted a wooden pickaxe")
+  } else if (recipe == 4) {
+    inventory[9] = inventory[9] - 2
+    inventory[14] = inventory[14] - 1
+    inventory[13] = inventory[13] + 1
+    showMessage("Crafted a wooden sword")
+  } else if (recipe == 5) {
+    inventory[8] = inventory[8] - 1
+    inventory[14] = inventory[14] - 1
+    inventory[11] = inventory[11] + 4
+    showMessage("Crafted 4 torches")
+  } else {
+    inventory[9] = inventory[9] - 2
+    inventory[14] = inventory[14] - 1
+    inventory[15] = inventory[15] + 1
+    showMessage("Crafted a wool bedroll")
+  }
+}
+
+function swingSword() {
+  if (inventory[13] <= 0) { showMessage("Craft a wooden sword at a workbench"); return }
+  let mut found = false
+  for (let mut i = 0; i < mobs.length; i = i + 1) {
+    let mob = mobs[i]
+    let dx = mob.x - playerX
+    let dz = mob.z - playerZ
+    let dist = Math.sqrt(dx * dx + dz * dz)
+    let dot = (dx * Math.sin(playerYaw) + dz * Math.cos(playerYaw)) / Math.max(0.001, dist)
+    if (!found && dist < 3.2 && dot > 0.45) {
+      mob.hp = mob.hp - 2
+      found = true
+      if (mob.hp <= 0) {
+        inventory[15] = inventory[15] + 1
+        mobs.splice(i, 1)
+        showMessage("Hostile defeated • +1 wool")
+      } else {
+        showMessage("Sword strike!")
+      }
+    }
+  }
+  if (!found) { showMessage("Whoosh!") }
+}
+
+function updateMobs(dt: number) {
+  let night = dayClock > 0.62 && dayClock < 0.96
+  for (let mut i = 0; i < mobs.length; i = i + 1) {
+    let mob = mobs[i]
+    mob.wander = mob.wander + dt
+    mob.attack = Math.max(0, mob.attack - dt)
+    let dx = playerX - mob.x
+    let dz = playerZ - mob.z
+    let dist = Math.sqrt(dx * dx + dz * dz)
+    let hostile = mob.kind == 1 && night
+    if (hostile && dist < 12 && dist > 1.1) {
+      let speed = dt * 1.0
+      let nx = mob.x + dx / Math.max(0.001, dist) * speed
+      let nz = mob.z + dz / Math.max(0.001, dist) * speed
+      let mobGround = terrainAt(mob.x, mob.z)
+      if (!isSolidAtHeight(nx, mob.z, mobGround, 0)) { mob.x = nx }
+      if (!isSolidAtHeight(mob.x, nz, terrainAt(mob.x, mob.z), 0)) { mob.z = nz }
+    } else if (mob.kind == 0 && mob.wander > 3) {
+      let sheepX = mob.x + Math.sin(mob.wander * 1.7) * dt * 0.35
+      let sheepZ = mob.z + Math.cos(mob.wander * 1.3) * dt * 0.35
+      if (!isSolidAtHeight(sheepX, mob.z, terrainAt(mob.x, mob.z), 0)) { mob.x = sheepX }
+      if (!isSolidAtHeight(mob.x, sheepZ, terrainAt(mob.x, mob.z), 0)) { mob.z = sheepZ }
+      if (mob.wander > 8) { mob.wander = 0 }
+    }
+    if (hostile && dist < 1.25 && mob.attack <= 0 && playerHealth > 0) {
+      playerHealth = playerHealth - 1
+      playerHunger = Math.max(0, playerHunger - 1)
+      mob.attack = 1.1
+      showMessage("A night crawler hit you! Find shelter or fight back")
+      if (playerHealth <= 0) { phase = Dead }
+    }
+  }
+  if (Math.floor(dayClock * 10) == 3 && random01() > 0.98 && mobs.length < 18) {
+    let sx = playerX + 10 + random01() * 8
+    let sz = playerZ + random01() * 10 - 5
+    mobs.push({ x: sx, z: sz, kind: 1, hp: 3, wander: 0, attack: 0 })
+  }
+}
+
+function colorShade(hex: string, factor: number): string {
+  // Canvas accepts CSS color tokens; distance tint is applied using globalAlpha.
+  hex
+}
+
+function drawSky(time: number) {
+  let night = dayClock > 0.62 && dayClock < 0.96
+  let mut top = "#67b8e8"
+  let mut bottom = "#c4e6f0"
+  if (night) { top = "#10172e"; bottom = "#38496b" }
+  else if (dayClock < 0.12 || dayClock > 0.48) { top = "#e99770"; bottom = "#f2c58c" }
+  let horizon = SCREEN_H * 0.48 + playerPitch * 42 + jumpOffset * 26
+  ctx.fillStyle = top
+  ctx.fillRect(0, 0, SCREEN_W, SCREEN_H)
+  ctx.fillStyle = bottom
+  ctx.fillRect(0, SCREEN_H * 0.34 + playerPitch * 45, SCREEN_W, SCREEN_H)
+  if (night) {
+    ctx.fillStyle = "#f8ecc5"
+    ctx.beginPath()
+    ctx.arc(375, 48, 13, 0, Math.PI * 2)
+    ctx.fill()
+    for (let mut i = 0; i < 32; i = i + 1) {
+      let sx = (i * 79 + 23) % SCREEN_W
+      let sy = (i * 43 + 15) % 90
+      ctx.fillStyle = "rgba(255,255,220,0.7)"
+      ctx.fillRect(sx, sy, 2, 2)
+    }
+  } else {
+    ctx.fillStyle = "#fff0b1"
+    ctx.beginPath()
+    ctx.arc(370 - dayClock * 140, 56, 18, 0, Math.PI * 2)
+    ctx.fill()
+    // Slow drifting blocky clouds.
+    for (let mut i = 0; i < 5; i = i + 1) {
+      let cx = ((i * 117 + time * 0.009) % (SCREEN_W + 80)) - 40
+      let cy = 30 + (i * 29) % 65
+      ctx.fillStyle = "rgba(255,255,255,0.48)"
+      ctx.fillRect(cx, cy, 42, 8)
+      ctx.fillRect(cx + 9, cy - 6, 24, 8)
+    }
+  }
+}
+
+function renderWorld(time: number) {
+  drawSky(time)
+  let horizon = SCREEN_H * 0.48 + playerPitch * 42 + jumpOffset * 26
+  let angleStep = FOV / RENDER_COLUMNS
+  let startAngle = playerYaw - FOV / 2
+  targetX = -1
+  targetZ = -1
+  targetBlock = 0
+  hitDistance = 0
+
+  for (let mut col = 0; col < RENDER_COLUMNS; col = col + 1) {
+    let rayAngle = startAngle + col * angleStep
+    let rayX = Math.sin(rayAngle)
+    let rayZ = Math.cos(rayAngle)
+    let mut nearest = 22.0
+    let mut nearestHeight = 0
+    let mut nearestBlock = 0
+    let mut dist = 0.2
+    let mut maxTop = SCREEN_H + 1
+    let mut stepCount = 0
+    while (dist < 22 && stepCount < 135) {
+      let wx = Math.floor(playerX + rayX * dist)
+      let wz = Math.floor(playerZ + rayZ * dist)
+      if (wx < 0 || wx >= WORLD_W || wz < 0 || wz >= WORLD_D) { break }
+      let mut h = heights[columnIndex(wx, wz)]
+      let topY = horizon + (playerGround + playerEyeHeight - h - 1) * (105 / dist)
+      if (topY < maxTop) { maxTop = topY }
+      if (nearestBlock == 0 && h >= playerGround + 1) {
+        nearest = dist
+        nearestHeight = h
+        nearestBlock = getBlock(wx, wz, h)
+      }
+      if (maxTop < 2) { break }
+      dist = dist + 0.16
+      stepCount = stepCount + 1
+    }
+    let sx = col * SCREEN_W / RENDER_COLUMNS
+    let sw = SCREEN_W / RENDER_COLUMNS + 1
+    let groundY = Math.max(horizon + 4, Math.min(SCREEN_H, maxTop))
+    ctx.fillStyle = "#4d7839"
+    if (dayClock > 0.62 && dayClock < 0.96) { ctx.fillStyle = "#1c342d" }
+    ctx.fillRect(sx, groundY, sw, SCREEN_H - groundY)
+
+    // Low-cost perspective texture sampling keeps the foreground from reading as a flat plane.
+    let mut groundPixelY = Math.floor(groundY / 6) * 6
+    while (groundPixelY < SCREEN_H) {
+      let sampleDist = Math.max(0.5, Math.min(22, 100 / Math.max(1, groundPixelY - horizon + 12)))
+      let groundX = Math.floor(playerX + rayX * sampleDist)
+      let groundZ = Math.floor(playerZ + rayZ * sampleDist)
+      let surfaceY = terrainAt(groundX, groundZ)
+      let surfaceBlock = getBlock(groundX, groundZ, surfaceY)
+      let mut surfaceColor = "#547d3d"
+      if (surfaceBlock == 4) { surfaceColor = "#c7ae69" }
+      else if (surfaceBlock == 7) { surfaceColor = "#3876a2" }
+      else if (surfaceBlock == 3) { surfaceColor = "#777674" }
+      else if (surfaceBlock == 6) { surfaceColor = "#466e38" }
+      else if (surfaceBlock == 2) { surfaceColor = "#806043" }
+      let textureCell = (Math.abs(Math.floor(groundX * 2)) + Math.abs(Math.floor(groundZ * 2))) % 9
+      if (surfaceBlock == 1 && textureCell == 0) { surfaceColor = "#668e43" }
+      else if (surfaceBlock == 1 && textureCell == 1) { surfaceColor = "#496f36" }
+      let surfaceShade = Math.max(0.42, 1 - sampleDist / 34)
+      ctx.globalAlpha = surfaceShade
+      ctx.fillStyle = surfaceColor
+      ctx.fillRect(sx, groundPixelY, sw, 6)
+      ctx.globalAlpha = 1
+      groundPixelY = groundPixelY + 6
+    }
+
+    // Distant fog bands add depth without expensive per-pixel ray casting.
+    if (nearestBlock != 0) {
+      let corrected = nearest * Math.cos(rayAngle - playerYaw)
+      let mut wallTop = horizon + (playerGround + playerEyeHeight - nearestHeight - 1) * (108 / corrected)
+      let mut wallBottom = horizon + (playerGround + playerEyeHeight - nearestHeight) * (108 / corrected)
+      if (wallBottom < groundY) { wallBottom = groundY }
+      if (wallTop < -60) { wallTop = -60 }
+      let wallColor = BLOCK_COLORS[nearestBlock]
+      let shade = Math.max(0.35, 1 - corrected / 25)
+      ctx.globalAlpha = shade
+      ctx.fillStyle = wallColor
+      ctx.fillRect(sx, wallTop, sw, Math.max(1, wallBottom - wallTop))
+      ctx.globalAlpha = 1
+      // Chunky horizontal strata and occasional grass/leaf highlights.
+      if (nearestBlock == 1 || nearestBlock == 6) {
+        ctx.fillStyle = nearestBlock == 1 ? "#80c44c" : "#70a74c"
+        ctx.fillRect(sx, wallTop, sw, 2)
+      }
+      if (nearestBlock == 5) {
+        ctx.fillStyle = "#573b27"
+        if (col % 3 == 0) { ctx.fillRect(sx, wallTop + 3, sw, Math.max(1, wallBottom - wallTop - 4)) }
+      }
+      if (col % 9 == 0) {
+        ctx.fillStyle = "rgba(24,27,22,0.22)"
+        ctx.fillRect(sx, wallTop, sw, Math.max(1, wallBottom - wallTop))
+      }
+      if (Math.abs(col - RENDER_COLUMNS / 2) <= 1) {
+        let wx = Math.floor(playerX + rayX * nearest)
+        let wz = Math.floor(playerZ + rayZ * nearest)
+        targetX = wx
+        targetZ = wz
+        targetBlock = nearestBlock
+        hitDistance = nearest
+      }
+    }
+    if (groundY < SCREEN_H) {
+      ctx.fillStyle = "rgba(35,45,33,0.28)"
+      ctx.fillRect(sx, Math.max(groundY, SCREEN_H - 22), sw, 2)
+    }
+  }
+
+  drawMobs()
+  drawCrosshair()
+  drawHUD()
+}
+
+function drawMobs() {
+  for (let mut i = 0; i < mobs.length; i = i + 1) {
+    let mob = mobs[i]
+    let dx = mob.x - playerX
+    let dz = mob.z - playerZ
+    let dist = Math.sqrt(dx * dx + dz * dz)
+    let mut relative = Math.atan2(dx, dz) - playerYaw
+    while (relative > Math.PI) { relative = relative - Math.PI * 2 }
+    while (relative < -Math.PI) { relative = relative + Math.PI * 2 }
+    if (Math.abs(relative) < FOV * 0.62 && dist > 0.4) {
+      let screenX = SCREEN_W / 2 + relative * (SCREEN_W / FOV)
+      let size = Math.min(64, 72 / dist)
+      let mobGround = terrainAt(mob.x, mob.z)
+      let horizon = SCREEN_H * 0.48 + playerPitch * 42 + jumpOffset * 26
+      let baseY = horizon + (playerGround + playerEyeHeight - mobGround - 1) * (108 / dist) + size * 0.65
+      let mut hiddenByTerrain = false
+      let mut sightStep = 1
+      while (sightStep < 150 && sightStep * 0.15 < dist) {
+        let sightX = playerX + dx / dist * sightStep * 0.15
+        let sightZ = playerZ + dz / dist * sightStep * 0.15
+        if (terrainAt(sightX, sightZ) > playerGround + 1) { hiddenByTerrain = true }
+        sightStep = sightStep + 1
+      }
+      if (!hiddenByTerrain && mob.kind == 0) {
+        ctx.fillStyle = "#ded8c8"
+        ctx.fillRect(screenX - size * 0.4, baseY - size * 0.72, size * 0.8, size * 0.52)
+        ctx.fillRect(screenX - size * 0.19, baseY - size * 0.97, size * 0.47, size * 0.34)
+        ctx.fillStyle = "#2b2927"
+        ctx.fillRect(screenX + size * 0.11, baseY - size * 0.83, 2, 2)
+      } else if (!hiddenByTerrain) {
+        ctx.fillStyle = "#425f4c"
+        ctx.fillRect(screenX - size * 0.34, baseY - size * 0.92, size * 0.68, size * 0.82)
+        ctx.fillStyle = "#7e9f75"
+        ctx.fillRect(screenX - size * 0.28, baseY - size, size * 0.56, size * 0.28)
+        ctx.fillStyle = "#d94d45"
+        ctx.fillRect(screenX - size * 0.18, baseY - size * 0.92, 3, 2)
+        ctx.fillRect(screenX + size * 0.09, baseY - size * 0.92, 3, 2)
+      }
+    }
+  }
+}
+
+function drawCrosshair() {
+  ctx.strokeStyle = "rgba(255,255,255,0.9)"
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(SCREEN_W / 2 - 7, SCREEN_H / 2)
+  ctx.lineTo(SCREEN_W / 2 - 2, SCREEN_H / 2)
+  ctx.moveTo(SCREEN_W / 2 + 2, SCREEN_H / 2)
+  ctx.lineTo(SCREEN_W / 2 + 7, SCREEN_H / 2)
+  ctx.moveTo(SCREEN_W / 2, SCREEN_H / 2 - 7)
+  ctx.lineTo(SCREEN_W / 2, SCREEN_H / 2 - 2)
+  ctx.moveTo(SCREEN_W / 2, SCREEN_H / 2 + 2)
+  ctx.lineTo(SCREEN_W / 2, SCREEN_H / 2 + 7)
+  ctx.stroke()
+}
+
+function drawHUD() {
+  // Soft dark edge, survival bars and an eight-slot hotbar.
+  ctx.fillStyle = "rgba(13,19,20,0.74)"
+  ctx.fillRect(10, 10, 148, 38)
+  ctx.fillStyle = "#f5f1df"
+  ctx.font = "bold 12px monospace"
+  ctx.fillText("DAY " + to_string(Math.floor(dayClock * 24)), 19, 25)
+  ctx.fillStyle = "#473b36"
+  ctx.fillRect(18, 33, 82, 8)
+  ctx.fillStyle = "#e85c50"
+  ctx.fillRect(18, 33, playerHealth * 8.2, 8)
+  ctx.fillStyle = "#473b36"
+  ctx.fillRect(108, 33, 38, 8)
+  ctx.fillStyle = "#e9b84e"
+  ctx.fillRect(108, 33, playerHunger * 3.8, 8)
+
+  for (let mut i = 0; i < 8; i = i + 1) {
+    let bx = SCREEN_W / 2 - 100 + i * 25
+    let by = SCREEN_H - 36
+    ctx.fillStyle = "rgba(12,16,18,0.82)"
+    ctx.fillRect(bx, by, 24, 24)
+    if (i == selected) {
+      ctx.strokeStyle = "#f5d27d"
+      ctx.lineWidth = 2
+      ctx.strokeRect(bx, by, 24, 24)
+    }
+    let mut block = HOTBAR[i]
+    ctx.fillStyle = BLOCK_COLORS[block]
+    ctx.fillRect(bx + 6, by + 5, 12, 12)
+    ctx.fillStyle = "#f4f1e7"
+    ctx.font = "10px monospace"
+    ctx.fillText(to_string(inventory[block]), bx + 7, by + 22)
+    ctx.fillStyle = "rgba(240,235,210,0.7)"
+    ctx.fillText(to_string(i + 1), bx + 2, by - 2)
+  }
+
+  if (targetBlock != 0 && hitDistance < MAX_REACH) {
+    ctx.fillStyle = "rgba(14,18,18,0.78)"
+    ctx.fillRect(SCREEN_W / 2 - 76, SCREEN_H - 58, 152, 16)
+    ctx.fillStyle = "#f2e9d3"
+    ctx.font = "10px monospace"
+    ctx.fillText(blockLabel(targetBlock) + "  •  " + to_string(Math.floor(hitDistance * 10) / 10) + "m", SCREEN_W / 2 - 68, SCREEN_H - 47)
+  }
+
+  if (messageTime > 0) {
+    let toast = message.substring(0, 30)
+    ctx.font = "bold 11px monospace"
+    let width = Math.min(260, toast.length * 7 + 24)
+    let toastX = SCREEN_W - width - 10
+    ctx.fillStyle = "rgba(14,18,18,0.84)"
+    ctx.fillRect(toastX, 59, width, 24)
+    ctx.fillStyle = "#fff4d5"
+    ctx.fillText(toast, toastX + 12, 75)
+  }
+
+  if (showDebug) {
+    ctx.fillStyle = "rgba(8,12,14,0.78)"
+    ctx.fillRect(10, 57, 180, 96)
+    ctx.fillStyle = "#9ee5bc"
+    ctx.font = "10px monospace"
+    ctx.fillText("XYZ " + to_string(Math.floor(playerX)) + " / " + to_string(playerGround) + " / " + to_string(Math.floor(playerZ)), 18, 73)
+    ctx.fillText("SEED " + to_string(seed) + "  MOBS " + to_string(mobs.length), 18, 88)
+    ctx.fillText("MINED " + to_string(scoreMined) + "  FPS ~30", 18, 103)
+    ctx.fillText("STATE " + phaseLabel(), 18, 118)
+    ctx.fillText("JUMP " + to_string(Math.floor(jumpOffset * 100) / 100), 18, 133)
+    ctx.fillText("DIR " + to_string(Math.floor(playerYaw * 100) / 100) + " / " + to_string(Math.floor(playerPitch * 100) / 100), 18, 148)
+  }
+  if (phase == Paused || phase == Dead || phase == Title) { drawOverlay() }
+  if (phase == Inventory) { drawInventory() }
+}
+
+function drawOverlay() {
+  ctx.fillStyle = "rgba(8,13,16,0.68)"
+  ctx.fillRect(0, 0, SCREEN_W, SCREEN_H)
+  ctx.textAlign = "center"
+  if (phase == Title) {
+    ctx.fillStyle = "#7fd17b"
+    ctx.font = "bold 38px monospace"
+    ctx.fillText("MINCRAFT", SCREEN_W / 2, 87)
+    ctx.fillStyle = "#f3e8cc"
+    ctx.font = "bold 12px monospace"
+    ctx.fillText("A TypeLang voxel survival sandbox", SCREEN_W / 2, 112)
+    ctx.fillStyle = "#d5c9ae"
+    ctx.font = "11px monospace"
+    ctx.fillText("Mine • craft • build • survive the night", SCREEN_W / 2, 146)
+    ctx.fillStyle = "#f6ce76"
+    ctx.fillText("CLICK TO CREATE A WORLD", SCREEN_W / 2, 191)
+    ctx.fillStyle = "#d6e3df"
+    ctx.font = "10px monospace"
+    ctx.fillText("WASD move  •  hold + drag to look  •  left mine  •  right place", SCREEN_W / 2, 218)
+    ctx.textAlign = "left"
+  } else if (phase == Dead) {
+    ctx.fillStyle = "#ef7769"
+    ctx.font = "bold 28px monospace"
+    ctx.fillText("YOU FADED INTO THE NIGHT", SCREEN_W / 2, 113)
+    ctx.fillStyle = "#f4e8d4"
+    ctx.font = "12px monospace"
+    ctx.fillText("The forest keeps your story. Start another world?", SCREEN_W / 2, 145)
+    ctx.fillStyle = "#f6ce76"
+    ctx.fillText("CLICK OR PRESS R TO RESPAWN", SCREEN_W / 2, 184)
+    ctx.textAlign = "left"
+  } else {
+    ctx.fillStyle = "#f6ce76"
+    ctx.font = "bold 30px monospace"
+    ctx.fillText("PAUSED", SCREEN_W / 2, 130)
+    ctx.fillStyle = "#f4e8d4"
+    ctx.font = "12px monospace"
+    ctx.fillText("Press ESC or click to return", SCREEN_W / 2, 160)
+    ctx.textAlign = "left"
+  }
+}
+
+function drawInventory() {
+  ctx.fillStyle = "rgba(9,14,16,0.83)"
+  ctx.fillRect(48, 26, 384, 248)
+  ctx.strokeStyle = "#8d9b78"
+  ctx.strokeRect(48, 26, 384, 248)
+  ctx.fillStyle = "#f2e7cb"
+  ctx.font = "bold 16px monospace"
+  ctx.fillText("FIELD KIT  /  CRAFTING", 66, 51)
+  ctx.font = "10px monospace"
+  ctx.fillStyle = "#a8b7a0"
+  ctx.fillText("ITEMS", 67, 75)
+  for (let mut i = 1; i < 17; i = i + 1) {
+    let bx = 67 + ((i - 1) % 5) * 47
+    let by = 84 + Math.floor((i - 1) / 5) * 26
+    ctx.fillStyle = "rgba(46,57,52,0.9)"
+    ctx.fillRect(bx, by, 39, 28)
+    ctx.fillStyle = BLOCK_COLORS[i]
+    ctx.fillRect(bx + 5, by + 6, 12, 12)
+    ctx.fillStyle = "#f3eddf"
+    ctx.font = "9px monospace"
+    ctx.fillText(to_string(inventory[i]), bx + 20, by + 15)
+    ctx.fillStyle = "#bac6bb"
+    ctx.fillText(BLOCK_NAMES[i].substring(0, 6), bx + 4, by + 27)
+  }
+  ctx.fillStyle = "#a8b7a0"
+  ctx.font = "10px monospace"
+  ctx.fillText("RECIPES  (click to craft)", 67, 202)
+  let recipes = ["Planks  ←  log", "Sticks  ←  2 planks", "Workbench  ←  4 planks", "Wood pick  ←  bench", "Sword  ←  bench", "Torches  ←  coal", "Wool wrap  ←  bench"]
+  for (let mut r = 0; r < 7; r = r + 1) {
+    let bx = 67 + (r % 2) * 174
+    let by = 218 + Math.floor(r / 2) * 15
+    if (canCraft(r)) { ctx.fillStyle = "#d9c98f" } else { ctx.fillStyle = "#778078" }
+    ctx.fillRect(bx, by - 10, 164, 13)
+    ctx.fillStyle = canCraft(r) ? "#242a24" : "#202624"
+    ctx.fillText(recipes[r], bx + 4, by)
+  }
+  ctx.fillStyle = "#cad1c5"
+  ctx.fillText("E / ESC closes kit", 316, 51)
+}
+
+function update(dt: number) {
+  if (messageTime > 0) { messageTime = Math.max(0, messageTime - dt) }
+  if (phase != Playing) { return }
+  dayClock = dayClock + dt / 150
+  if (dayClock >= 1) { dayClock = dayClock - 1 }
+  playerHunger = Math.max(0, playerHunger - dt * 0.012)
+  if (playerHunger <= 0 && Math.floor(dayClock * 8) % 3 == 0 && random01() > 0.985) {
+    playerHealth = Math.max(0, playerHealth - 1)
+    if (playerHealth == 0) { phase = Dead }
+  }
+  let mut forward = 0.0
+  let mut strafe = 0.0
+  if (keys.indexOf("w") >= 0 || keys.indexOf("arrowup") >= 0) { forward = forward + 1 }
+  if (keys.indexOf("s") >= 0 || keys.indexOf("arrowdown") >= 0) { forward = forward - 1 }
+  if (keys.indexOf("a") >= 0 || keys.indexOf("arrowleft") >= 0) { strafe = strafe - 1 }
+  if (keys.indexOf("d") >= 0 || keys.indexOf("arrowright") >= 0) { strafe = strafe + 1 }
+  let magnitude = Math.sqrt(forward * forward + strafe * strafe)
+  if (magnitude > 0) {
+    let speed = 3.2 * dt / magnitude
+    let dx = (Math.sin(playerYaw) * forward + Math.cos(playerYaw) * strafe) * speed
+    let dz = (Math.cos(playerYaw) * forward - Math.sin(playerYaw) * strafe) * speed
+    tryMove(dx, dz)
+    lastMove = lastMove + dt
+    if (lastMove > 1.8 && playerHunger > 0) {
+      playerHunger = Math.max(0, playerHunger - 0.1)
+      lastMove = 0
+    }
+  }
+  if (keys.indexOf(" ") >= 0 && jumpOffset <= 0.01) { jumpVelocity = 4.4 }
+  if (jumpOffset > 0 || jumpVelocity > 0) {
+    jumpOffset = jumpOffset + jumpVelocity * dt
+    jumpVelocity = jumpVelocity - 12 * dt
+    let supportHeight = terrainAt(playerX, playerZ)
+    if (jumpVelocity < 0 && supportHeight > playerGround && jumpOffset <= supportHeight - playerGround) {
+      playerGround = supportHeight
+      jumpOffset = 0
+      jumpVelocity = 0
+    } else if (jumpOffset < 0) {
+      jumpOffset = 0
+      jumpVelocity = 0
+      playerGround = supportHeight
+    }
+  }
+  updateMobs(dt)
+}
+
+function handleKeyDown(event: any) {
+  let key = event.key
+  let lower = key.toLowerCase()
+  let isNewPress = keys.indexOf(lower) < 0
+  if (isNewPress) { keys.push(lower) }
+  if (key == " " && isNewPress && phase == Playing && jumpOffset <= 0.01 && jumpVelocity <= 0) {
+    jumpVelocity = 5.5
+  }
+  if (key == "Escape") {
+    if (phase == Inventory) { phase = Playing }
+    else if (phase == Playing) { phase = Paused }
+    else if (phase == Paused) { phase = Playing }
+  } else if (key == "e" || key == "E") {
+    if (phase == Playing) { phase = Inventory }
+    else if (phase == Inventory) { phase = Playing }
+  } else if (key == "F3") {
+    showDebug = !showDebug
+  } else if (key == "r" || key == "R") {
+    if (phase == Title || phase == Dead) { resetGame() }
+  } else if (key == "q" || key == "Q") {
+    if (phase == Playing) { swingSword() }
+  } else if (key == "f" || key == "F") {
+    if (phase == Playing && inventory[16] > 0) {
+      inventory[16] = inventory[16] - 1
+      playerHealth = Math.min(10, playerHealth + 2)
+      playerHunger = Math.min(10, playerHunger + 3)
+      showMessage("A forest apple restored your strength")
+    }
+  } else if (key == "1") { selected = 0
+  } else if (key == "2") { selected = 1
+  } else if (key == "3") { selected = 2
+  } else if (key == "4") { selected = 3
+  } else if (key == "5") { selected = 4
+  } else if (key == "6") { selected = 5
+  } else if (key == "7") { selected = 6
+  } else if (key == "8") { selected = 7
+  }
+  if (key == " " || key.indexOf("Arrow") == 0) { event.preventDefault() }
+}
+
+function handleKeyUp(event: any) {
+  let lower = event.key.toLowerCase()
+  let idx = keys.indexOf(lower)
+  if (idx >= 0) { keys.splice(idx, 1) }
+}
+
+function handleMouseMove(event: any) {
+  if (phase == Playing && lookDragging) {
+    let scaleX = SCREEN_W / canvas.clientWidth
+    let scaleY = SCREEN_H / canvas.clientHeight
+    playerYaw = playerYaw + event.movementX * scaleX * 0.003
+    playerPitch = Math.max(-0.65, Math.min(0.65, playerPitch + event.movementY * scaleY * 0.002))
+  }
+  lastMouseX = event.offsetX
+  lastMouseY = event.offsetY
+}
+
+function handleMouseDown(event: any) {
+  if (phase == Title || phase == Dead) {
+    resetGame()
+    return
+  }
+  if (phase == Paused) { phase = Playing; return }
+  if (phase == Inventory) {
+    let x = event.offsetX * SCREEN_W / canvas.clientWidth
+    let y = event.offsetY * SCREEN_H / canvas.clientHeight
+    if (y >= 210 && y <= 271) {
+      let row = Math.floor((y - 210) / 15)
+      let col = Math.floor((x - 67) / 174)
+      if (x >= 67 && x <= 405) {
+        let recipe = row * 2 + col
+        if (recipe >= 0 && recipe <= 6) { craft(recipe) }
+      }
+    }
+    return
+  }
+  if (phase != Playing) { return }
+  lookDragging = true
+  if (event.button == 0) {
+    if (inventory[13] > 0 && keys.indexOf("shift") >= 0) { swingSword() }
+    else { mineTarget() }
+  } else if (event.button == 2) {
+    placeBlock()
+  }
+}
+
+function handleWheel(event: any) {
+  selected = (selected + 8 + Math.floor(event.deltaY / 100)) % 8
+  event.preventDefault()
+}
+
+function drawFrame(time: number) {
+  if (time - lastFrame < 30) { requestAnimationFrame(drawFrame); return }
+  let mut dt = (time - lastFrame) / 1000
+  if (dt > 0.08) { dt = 0.08 }
+  lastFrame = time
+  update(dt)
+  renderWorld(time)
+  requestAnimationFrame(drawFrame)
+}
+
+function start() {
+  ctx.imageSmoothingEnabled = false
+  canvas.addEventListener("contextmenu", fn(event) { event.preventDefault() })
+  canvas.addEventListener("mousedown", fn(event) { handleMouseDown(event) })
+  canvas.addEventListener("mousemove", fn(event) { handleMouseMove(event) })
+  canvas.addEventListener("mouseup", fn(event) { lookDragging = false })
+  canvas.addEventListener("wheel", fn(event) { handleWheel(event) })
+  canvas.addEventListener("keydown", fn(event) { handleKeyDown(event) })
+  canvas.addEventListener("keyup", fn(event) { handleKeyUp(event) })
+  canvas.addEventListener("blur", fn(event) { keys = [] })
+  requestAnimationFrame(drawFrame)
+}
+
+resetInventory()
+start()
