@@ -20,14 +20,18 @@ import { MiniConsole } from './components/MiniConsole';
 import { formatTypeLangCode } from './lang/formatter';
 import { LLVMStudioModal } from './components/LLVMStudioModal';
 import { VSCodeExportModal } from './components/VSCodeExportModal';
-import { Code2, Terminal as TerminalIcon, Eye, Sparkles, Download, Play, X, ChevronDown, Wand2, Crosshair, GripVertical, ChevronsLeft, ChevronsRight, Maximize2, Minimize2, RotateCcw } from 'lucide-react';
+import { TaskManagerModal } from './components/TaskManagerModal';
+import { taskManager } from './lang/taskManager';
+import { Code2, Terminal as TerminalIcon, Eye, Sparkles, Download, Play, Square, X, ChevronDown, Wand2, Crosshair, GripVertical, ChevronsLeft, ChevronsRight, Maximize2, Minimize2, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { JSSandbox } from './lang/js_runtime';
 
 const STORAGE_KEY = 'typelang_project_v1';
 
 export default function App() {
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [activeFileId, setActiveFileId] = useState<string>('');
+  const [currentExampleId, setCurrentExampleId] = useState<string>('');
 
   const [stdout, setStdout] = useState<string[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
@@ -36,6 +40,8 @@ export default function App() {
   const [llvmCode, setLlvmCode] = useState<string>('');
   const [jsCode, setJsCode] = useState<string>('');
   const [nodeCode, setNodeCode] = useState<string>('');
+  const [cCode, setCCode] = useState<string>('');
+  const [cppCode, setCppCode] = useState<string>('');
   const [executionTimeMs, setExecutionTimeMs] = useState<number | null>(null);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [hasError, setHasError] = useState<boolean>(false);
@@ -44,6 +50,7 @@ export default function App() {
   const [isSpecOpen, setIsSpecOpen] = useState<boolean>(false);
   const [isLLVMStudioOpen, setIsLLVMStudioOpen] = useState<boolean>(false);
   const [isVSCodeModalOpen, setIsVSCodeModalOpen] = useState<boolean>(false);
+  const [isTaskManagerOpen, setIsTaskManagerOpen] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
 
   // Split pane sizing & resizability for laptop / desktop screens
@@ -159,6 +166,7 @@ export default function App() {
         if (parsed.files && parsed.files.length > 0) {
           setFiles(parsed.files);
           setActiveFileId(parsed.activeFileId || parsed.files[0].id);
+          setCurrentExampleId(parsed.currentExampleId || '');
           return;
         }
       } catch (e) {
@@ -169,6 +177,7 @@ export default function App() {
     const initialFiles = [{ id: 'main', name: 'main.tl', content: EXAMPLES[0].code }];
     setFiles(initialFiles);
     setActiveFileId('main');
+    setCurrentExampleId(EXAMPLES[0].id);
   }, []);
 
   // Auto-save to localStorage
@@ -177,10 +186,11 @@ export default function App() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         files,
         activeFileId,
+        currentExampleId,
         timestamp: new Date().toISOString()
       }));
     }
-  }, [files, activeFileId]);
+  }, [files, activeFileId, currentExampleId]);
 
   const confirm = (title: string, message: string, onConfirm: () => void, variant: 'danger' | 'warning' | 'info' = 'warning') => {
     setConfirmState({ isOpen: true, title, message, onConfirm, variant });
@@ -320,7 +330,27 @@ export default function App() {
     });
   };
 
+  const stopAllExecution = () => {
+    JSSandbox.cleanup();
+    taskManager.killAllTasks();
+    setIsExecuting(false);
+    setStdout(prev => (prev.length > 0 && prev[prev.length - 1].includes('Program execution stopped') ? prev : [...prev, '⏹ [Program execution stopped by user]']));
+  };
+
+  // Global Escape key shortcut to stop running code
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSpecOpen && !isLLVMStudioOpen && !isVSCodeModalOpen && !isTaskManagerOpen && !confirmState.isOpen && !promptState.isOpen) {
+        stopAllExecution();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [isSpecOpen, isLLVMStudioOpen, isVSCodeModalOpen, isTaskManagerOpen, confirmState.isOpen, promptState.isOpen]);
+
   const clearPreviewAndStatus = () => {
+    JSSandbox.cleanup();
+    taskManager.killAllTasks();
     setStdout([]);
     setDiagnostics([]);
     setProgramAST(null);
@@ -330,6 +360,8 @@ export default function App() {
     setJsCode('');
     setLlvmCode('');
     setNodeCode('');
+    setCCode('');
+    setCppCode('');
     setIsLivePreviewOpen(false);
     setMobileTab('editor');
   };
@@ -340,84 +372,65 @@ export default function App() {
     setHasError(false);
     setLastError(null);
 
-    try {
-      const lexer = new Lexer(combinedSource);
-      const tokens = lexer.tokenize();
-      const parser = new Parser(tokens);
-      const ast = parser.parseProgram();
-      setProgramAST(ast);
-
-      const typeChecker = new TypeChecker();
-      const env = typeChecker.checkProgram(ast);
-      setTypeEnv(env);
-
-      const enriched = processDiagnostics(typeChecker.diagnostics, combinedSource, map);
-      setDiagnostics(enriched);
-
-      const typeErrors = typeChecker.diagnostics.filter(d => d.severity === 'error');
-      if (typeErrors.length > 0) {
+    taskManager.runWorkerTask(
+      `Eval: ${activeFile?.name || 'main.tl'}`,
+      'eval',
+      {
+        action: 'eval',
+        combinedSource,
+        mapEntries: map
+      },
+      (res) => {
+        setIsExecuting(false);
+        if (res.ast) setProgramAST(res.ast);
+        if (res.diagnostics) setDiagnostics(res.diagnostics);
+        if (res.stdout) setStdout(res.stdout);
+        if (res.executionTimeMs !== undefined) setExecutionTimeMs(res.executionTimeMs);
+        if (res.llvmCode) setLlvmCode(res.llvmCode);
+        if (res.jsCode) setJsCode(res.jsCode);
+        if (res.nodeCode) setNodeCode(res.nodeCode);
+        if (res.cCode) setCCode(res.cCode);
+        if (res.cppCode) setCppCode(res.cppCode);
+        setHasError(!res.success);
+      },
+      (err) => {
+        setIsExecuting(false);
         setHasError(true);
-        const report = enriched[0]?.ariadneReport || enriched[0]?.ariadneReportPlain || typeErrors[0].message;
-        setStdout([
-          `❌ Type Check Failed: ${typeErrors.length} error(s) found.\n\n${report}`
-        ]);
-        setExecutionTimeMs(null);
-        return;
       }
-
-      const evaluator = new Evaluator();
-      const evalResult = evaluator.evalProgram(ast);
-      setStdout(evalResult.stdout);
-      setExecutionTimeMs(evalResult.executionTimeMs);
-
-      const codegen = new LLVMGenerator();
-      setLlvmCode(codegen.generateLLVM(ast));
-      setJsCode(codegen.generateJS(ast));
-      setNodeCode(codegen.generateNode(ast));
-    } catch (err: any) {
-      setHasError(true);
-      const errorMessage = err.message || String(err);
-      setLastError(errorMessage);
-      const diag = createDiagnosticFromError(err, combinedSource);
-      const enriched = processDiagnostics([diag], combinedSource, map);
-      setDiagnostics(enriched);
-      const reportStr = enriched[0]?.ariadneReport || enriched[0]?.ariadneReportPlain || errorMessage;
-      setStdout([`❌ Error:\n\n${reportStr}`]);
-      setExecutionTimeMs(null);
-    } finally {
-      setIsExecuting(false);
-    }
+    );
   };
 
-  // Debounced live type-checking
+  // Debounced live type-checking offloaded to worker thread
   useEffect(() => {
     const timer = setTimeout(() => {
       if (files.length === 0) return;
       const { combinedSource, map } = getCombinedSourceWithMap(files);
-      try {
-        const lexer = new Lexer(combinedSource);
-        const tokens = lexer.tokenize();
-        const parser = new Parser(tokens);
-        const ast = parser.parseProgram();
-        setProgramAST(ast);
 
-        const typeChecker = new TypeChecker();
-        const env = typeChecker.checkProgram(ast);
-        setTypeEnv(env);
-
-        const enriched = processDiagnostics(typeChecker.diagnostics, combinedSource, map);
-        setDiagnostics(enriched);
-        setHasError(typeChecker.diagnostics.some(d => d.severity === 'error'));
-      } catch (err: any) {
-        const diag = createDiagnosticFromError(err, combinedSource);
-        const { combinedSource: src, map } = getCombinedSourceWithMap(files);
-        setDiagnostics(processDiagnostics([diag], src, map));
-        setHasError(true);
-      }
-    }, 500);
+      taskManager.runWorkerTask(
+        `Typecheck: ${activeFile?.name || 'main.tl'}`,
+        'typecheck',
+        {
+          action: 'typecheck',
+          combinedSource,
+          mapEntries: map
+        },
+        (res) => {
+          if (res.ast) setProgramAST(res.ast);
+          if (res.diagnostics) {
+            setDiagnostics(res.diagnostics);
+            setHasError(res.diagnostics.some(d => d.severity === 'error'));
+          }
+          if (res.llvmCode) setLlvmCode(res.llvmCode);
+          if (res.jsCode) setJsCode(res.jsCode);
+          if (res.nodeCode) setNodeCode(res.nodeCode);
+          if (res.cCode) setCCode(res.cCode);
+          if (res.cppCode) setCppCode(res.cppCode);
+        }
+      );
+    }, 400);
 
     return () => clearTimeout(timer);
-  }, [files]);
+  }, [files, activeFile?.name]);
 
   const handleSelectExample = (ex: ExampleProgram) => {
     confirm(
@@ -425,6 +438,7 @@ export default function App() {
       "This will replace your current files. Make sure you have saved your work.",
       () => {
         clearPreviewAndStatus();
+        setCurrentExampleId(ex.id);
         
         if (ex.files && ex.files.length > 0) {
           const newFiles = ex.files.map(f => ({
@@ -447,8 +461,19 @@ export default function App() {
   };
 
   const handleFormatCode = () => {
-    const formatted = formatTypeLangCode(activeCode);
-    updateFileContent(activeFileId, formatted);
+    taskManager.runWorkerTask(
+      `Format: ${activeFile?.name || 'main.tl'}`,
+      'format',
+      {
+        action: 'format',
+        code: activeCode
+      },
+      (res) => {
+        if (res.formattedCode) {
+          updateFileContent(activeFileId, res.formattedCode);
+        }
+      }
+    );
   };
 
   const updateFileContent = (id: string, content: string) => {
@@ -533,6 +558,7 @@ export default function App() {
         const newFiles = [{ id: 'main', name: 'main.tl', content: '' }];
         setFiles(newFiles);
         setActiveFileId('main');
+        setCurrentExampleId('');
         clearPreviewAndStatus();
       },
       'danger'
@@ -588,9 +614,11 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 font-sans text-slate-100 overflow-hidden">
       <Header
-        currentExampleId={''} // Not used as much now
+        currentExampleId={currentExampleId}
         onSelectExample={handleSelectExample}
         onRun={runCode}
+        onStop={stopAllExecution}
+        isRunning={isExecuting}
         isExecuting={isExecuting}
         onOpenSpec={() => setIsSpecOpen(true)}
         onOpenStdLib={() => {
@@ -599,6 +627,7 @@ export default function App() {
         }}
         onOpenLLVMStudio={() => setIsLLVMStudioOpen(true)}
         onOpenVSCodeModal={() => setIsVSCodeModalOpen(true)}
+        onOpenTaskManager={() => setIsTaskManagerOpen(true)}
         onFormat={handleFormatCode}
         onShare={handleShare}
         onNew={handleNewProject}
@@ -675,19 +704,28 @@ export default function App() {
                 initial={{ opacity: 0, scale: 0.8, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.8, y: 20 }}
-                className="flex flex-col space-y-4 pointer-events-auto items-end bg-slate-900/40 p-3 rounded-3xl border border-slate-800/50 backdrop-blur-sm"
+                className="flex flex-col space-y-3.5 pointer-events-auto items-end bg-slate-900/60 p-3 rounded-3xl border border-slate-800/80 backdrop-blur-md shadow-2xl"
               >
-                <button
-                  onClick={runCode}
-                  disabled={isExecuting}
-                  className="p-4 bg-emerald-600 text-white rounded-full shadow-2xl border-4 border-emerald-500/50 active:scale-95 transition-all"
-                  title="Run Code"
-                >
-                  <Play className="w-7 h-7 fill-current" />
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={runCode}
+                    disabled={isExecuting}
+                    className="p-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full shadow-2xl border-2 border-emerald-400/50 active:scale-95 transition-all cursor-pointer"
+                    title="Run Code (Ctrl+Enter)"
+                  >
+                    <Play className="w-6 h-6 fill-current" />
+                  </button>
+                  <button
+                    onClick={stopAllExecution}
+                    className="p-3.5 bg-rose-600 hover:bg-rose-500 text-white rounded-full shadow-2xl border-2 border-rose-400/50 active:scale-95 transition-all cursor-pointer"
+                    title="Stop All Running Code, Audio & Loops (Escape)"
+                  >
+                    <Square className="w-6 h-6 fill-current" />
+                  </button>
+                </div>
                 <button
                   onClick={handleNewProject}
-                  className="p-3 bg-slate-800 text-indigo-400 rounded-full shadow-2xl border border-indigo-500/20 active:scale-95 transition-all"
+                  className="p-3 bg-slate-800 text-indigo-400 hover:bg-slate-700 rounded-full shadow-2xl border border-indigo-500/20 active:scale-95 transition-all cursor-pointer"
                   title="New Project"
                 >
                   <Sparkles className="w-6 h-6" />
@@ -703,14 +741,14 @@ export default function App() {
                     };
                     input.click();
                   }}
-                  className="p-3 bg-slate-800 text-amber-400 rounded-full shadow-2xl border border-amber-500/20 active:scale-95 transition-all"
+                  className="p-3 bg-slate-800 text-amber-400 hover:bg-slate-700 rounded-full shadow-2xl border border-amber-500/20 active:scale-95 transition-all cursor-pointer"
                   title="Load Project"
                 >
                   <Download className="w-6 h-6 rotate-180" />
                 </button>
                 <button
                   onClick={handleSaveProject}
-                  className="p-3 bg-indigo-600 text-white rounded-full shadow-2xl border border-indigo-500 active:scale-95 transition-all"
+                  className="p-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full shadow-2xl border border-indigo-500 active:scale-95 transition-all cursor-pointer"
                   title="Save Project"
                 >
                   <Download className="w-6 h-6" />
@@ -718,7 +756,7 @@ export default function App() {
                 
                 <button
                   onClick={() => setIsFabMinimized(true)}
-                  className="p-2 bg-slate-900/80 backdrop-blur-sm text-slate-500 hover:text-white rounded-full border border-slate-700 active:scale-95 transition-all"
+                  className="p-2 bg-slate-900/80 backdrop-blur-sm text-slate-500 hover:text-white rounded-full border border-slate-700 active:scale-95 transition-all cursor-pointer"
                   title="Minimize Actions"
                 >
                   <X className="w-4 h-4" />
@@ -761,6 +799,8 @@ export default function App() {
             code={activeCode}
             onChange={val => updateFileContent(activeFileId, val)}
             onRun={runCode}
+            onStop={stopAllExecution}
+            isRunning={isExecuting}
             onFormat={handleFormatCode}
             onApplyQuickFix={handleApplyQuickFix}
             diagnostics={diagnostics}
@@ -774,12 +814,15 @@ export default function App() {
             isMaximized={isMaximized}
             onToggleMaximize={() => setIsMaximized(!isMaximized)}
             onOpenVSCodeModal={() => setIsVSCodeModalOpen(true)}
+            currentExampleName={EXAMPLES.find(ex => ex.id === currentExampleId)?.name}
           />
 
           <MiniConsole 
             stdout={stdout}
             executionTimeMs={executionTimeMs || undefined}
             error={lastError}
+            onStop={stopAllExecution}
+            isRunning={isExecuting}
             onClear={() => {
               setStdout([]);
               setLastError(null);
@@ -897,6 +940,8 @@ export default function App() {
             <div className="absolute inset-0 bg-slate-950 z-20 overflow-hidden">
                <LiveAppPreview 
                 jsCode={jsCode} 
+                onStop={stopAllExecution}
+                isRunning={isExecuting}
                 onLoadCodeIntoEditor={(c) => {
                   const id = Math.random().toString(36).substring(7);
                   setFiles([...files, { id, name: `test_${Date.now()}.tl`, content: c }]);
@@ -914,9 +959,13 @@ export default function App() {
               llvmCode={llvmCode}
               jsCode={jsCode}
               nodeCode={nodeCode}
+              cCode={cCode}
+              cppCode={cppCode}
               executionTimeMs={executionTimeMs}
               hasError={hasError}
               onClearStdout={() => setStdout([])}
+              onStop={stopAllExecution}
+              isRunning={isExecuting}
               onApplyQuickFix={handleApplyQuickFix}
               onOpenLLVMStudio={() => setIsLLVMStudioOpen(true)}
               onLoadCodeIntoEditor={(testCode) => {
@@ -952,7 +1001,7 @@ export default function App() {
                 </div>
                 <button 
                   onClick={() => setIsLivePreviewOpen(false)}
-                  className="p-1 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-white transition-colors"
+                  className="p-1 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-white transition-colors cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -960,6 +1009,8 @@ export default function App() {
               <div className="flex-1 min-h-0">
                 <LiveAppPreview 
                   jsCode={jsCode} 
+                  onStop={stopAllExecution}
+                  isRunning={isExecuting}
                   onLoadCodeIntoEditor={(c) => {
                     const id = Math.random().toString(36).substring(7);
                     setFiles([...files, { id, name: `generated_${Date.now()}.tl`, content: c }]);
@@ -983,6 +1034,11 @@ export default function App() {
       <VSCodeExportModal
         isOpen={isVSCodeModalOpen}
         onClose={() => setIsVSCodeModalOpen(false)}
+      />
+
+      <TaskManagerModal
+        isOpen={isTaskManagerOpen}
+        onClose={() => setIsTaskManagerOpen(false)}
       />
 
       <ConfirmationDialog

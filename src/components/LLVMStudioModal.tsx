@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Play,
+  Square,
   RotateCcw,
   Trash2,
   X,
@@ -250,6 +251,18 @@ export const LLVMStudioModal: React.FC<LLVMStudioModalProps> = ({
             >
               <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
               <span className="hidden sm:inline">{isExecuting ? 'Compiling...' : 'Run'}</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setIsExecuting(false);
+                setIsRunningTests(false);
+              }}
+              title="Stop Execution & Tests"
+              className="flex items-center space-x-1 px-2 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 hover:border-rose-500/50 text-xs font-semibold transition cursor-pointer"
+            >
+              <Square className="w-3.5 h-3.5 fill-current text-rose-400" />
+              <span className="hidden sm:inline">Stop</span>
             </button>
 
             <button

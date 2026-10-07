@@ -227,6 +227,24 @@ export function createInitialEnv(): TypeEnv {
     returnType: PRIM_STRING
   });
 
+  env.vars.set('parse_int', {
+    kind: 'fun',
+    params: [{ name: 's', type: PRIM_STRING }],
+    returnType: PRIM_NUMBER
+  });
+
+  env.vars.set('parse_float', {
+    kind: 'fun',
+    params: [{ name: 's', type: PRIM_STRING }],
+    returnType: PRIM_NUMBER
+  });
+
+  env.vars.set('time_now', {
+    kind: 'fun',
+    params: [],
+    returnType: PRIM_NUMBER
+  });
+
   // Standard library modules
   const mathEnv: TypeEnv = {
     vars: new Map(),

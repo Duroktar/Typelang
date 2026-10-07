@@ -10,6 +10,7 @@ import {
   XCircle,
   FlaskConical,
   Play,
+  Square,
   RotateCw,
   ChevronDown,
   ChevronRight,
@@ -51,12 +52,16 @@ interface OutputPanelProps {
   llvmCode: string;
   jsCode: string;
   nodeCode?: string;
+  cCode?: string;
+  cppCode?: string;
   executionTimeMs: number | null;
   hasError: boolean;
   onClearStdout: () => void;
   onLoadCodeIntoEditor?: (code: string, testName: string) => void;
   onApplyQuickFix?: (fix: QuickFix) => void;
   onOpenLLVMStudio?: () => void;
+  onStop?: () => void;
+  isRunning?: boolean;
   code?: string;
   cursorPos?: { line: number; col: number; word?: string } | null;
   activeTab?: 'console' | 'explorer' | 'stdlib' | 'types' | 'hierarchy' | 'preview' | 'ffi' | 'ast' | 'env' | 'codegen' | 'tests';
@@ -71,12 +76,16 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   llvmCode,
   jsCode,
   nodeCode = '',
+  cCode = '',
+  cppCode = '',
   executionTimeMs,
   hasError,
   onClearStdout,
   onLoadCodeIntoEditor,
   onApplyQuickFix,
   onOpenLLVMStudio,
+  onStop,
+  isRunning = false,
   code = '',
   cursorPos = null,
   activeTab: controlledActiveTab,
@@ -91,7 +100,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
     }
     setInternalActiveTab(tab);
   };
-  const [codegenSubTab, setCodegenSubTab] = useState<'llvm' | 'js' | 'node'>('js');
+  const [codegenSubTab, setCodegenSubTab] = useState<'llvm' | 'js' | 'node' | 'cpp' | 'c'>('cpp');
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [showStdLibModules, setShowStdLibModules] = useState<boolean>(false);
   const [sandboxResult, setSandboxResult] = useState<JSRuntimeResult | null>(null);
@@ -136,6 +145,15 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
       setSandboxResult(res);
       setIsRunningSandbox(false);
     }, 40);
+  };
+
+  const handleStopSandbox = () => {
+    JSSandbox.cleanup();
+    setIsRunningSandbox(false);
+    setIsRunningLLVM(false);
+    if (onStop) {
+      onStop();
+    }
   };
 
   // Test Runner State
@@ -397,6 +415,16 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                     onChange={e => setConsoleFilter(e.target.value)}
                     className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-300 text-[11px] focus:outline-none focus:border-indigo-500"
                   />
+                )}
+                {onStop && (
+                  <button
+                    onClick={onStop}
+                    className="flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 transition cursor-pointer"
+                    title="Stop Execution & Kill All Active Loops/Audio (Escape)"
+                  >
+                    <Square className="w-2.5 h-2.5 fill-current text-rose-400" />
+                    <span>Stop</span>
+                  </button>
                 )}
                 {stdout.length > 0 && (
                   <button
@@ -998,6 +1026,32 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 </button>
                 <button
                   onClick={() => {
+                    setCodegenSubTab('c');
+                    setSandboxResult(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                    codegenSubTab === 'c'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  C Native (C11)
+                </button>
+                <button
+                  onClick={() => {
+                    setCodegenSubTab('cpp');
+                    setSandboxResult(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                    codegenSubTab === 'cpp'
+                      ? 'bg-sky-600 text-white shadow-sm'
+                      : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  C++ Native (C++17)
+                </button>
+                <button
+                  onClick={() => {
                     setCodegenSubTab('llvm');
                     setSandboxResult(null);
                   }}
@@ -1022,6 +1076,16 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                       <Play className="w-3.5 h-3.5 fill-current" />
                       <span>{isRunningLLVM ? 'Executing...' : 'Run LLVM IR'}</span>
                     </button>
+                    {isRunningLLVM && (
+                      <button
+                        onClick={handleStopSandbox}
+                        className="flex items-center space-x-1 px-2.5 py-1 text-xs rounded bg-rose-600 hover:bg-rose-500 text-white transition cursor-pointer shadow-sm font-medium"
+                        title="Stop LLVM Execution"
+                      >
+                        <Square className="w-3 h-3 fill-current" />
+                        <span>Stop</span>
+                      </button>
+                    )}
                     <button
                       onClick={handleBuildAndDownloadWasm}
                       disabled={isBuildingWasm}
@@ -1041,15 +1105,59 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                       </button>
                     )}
                   </>
-                ) : (
+                ) : codegenSubTab === 'c' ? (
                   <button
-                    onClick={handleRunSandbox}
-                    disabled={isRunningSandbox}
-                    className="flex items-center space-x-1 px-3 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500 text-white transition cursor-pointer shadow-sm disabled:opacity-50 font-medium"
+                    onClick={() => {
+                      const blob = new Blob([cCode], { type: 'text/x-csrc;charset=utf-8;' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = 'program.c';
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="flex items-center space-x-1 px-3 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition cursor-pointer shadow-sm font-medium"
+                    title="Download standalone C source file ready to compile with gcc / clang"
                   >
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>{isRunningSandbox ? 'Executing...' : 'Run in JS Sandbox'}</span>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download .c</span>
                   </button>
+                ) : codegenSubTab === 'cpp' ? (
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([cppCode || cCode], { type: 'text/x-c++src;charset=utf-8;' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = 'program.cpp';
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="flex items-center space-x-1 px-3 py-1 text-xs rounded bg-sky-600 hover:bg-sky-500 text-white transition cursor-pointer shadow-sm font-medium"
+                    title="Download standalone C++ source file ready to compile with g++ / clang++"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download .cpp</span>
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleRunSandbox}
+                      disabled={isRunningSandbox}
+                      className="flex items-center space-x-1 px-3 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500 text-white transition cursor-pointer shadow-sm disabled:opacity-50 font-medium"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>{isRunningSandbox ? 'Executing...' : 'Run in JS Sandbox'}</span>
+                    </button>
+                    <button
+                      onClick={handleStopSandbox}
+                      className="flex items-center space-x-1 px-2.5 py-1 text-xs rounded bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 border border-rose-500/40 transition cursor-pointer shadow-sm font-medium"
+                      title="Stop Sandbox Execution & Clear Intervals (Escape)"
+                    >
+                      <Square className="w-3 h-3 fill-current text-rose-400" />
+                      <span>Stop</span>
+                    </button>
+                  </>
                 )}
 
                 <button
@@ -1059,6 +1167,10 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                         ? llvmCode
                         : codegenSubTab === 'node'
                         ? nodeCode
+                        : codegenSubTab === 'c'
+                        ? cCode
+                        : codegenSubTab === 'cpp'
+                        ? (cppCode || cCode)
                         : jsCode;
                     handleCopyCodegen(currentCode, codegenSubTab);
                   }}
@@ -1155,6 +1267,10 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                   ? 'Target: x86_64 POSIX Native | Tagged Union Allocations & LLVM SSA form'
                   : codegenSubTab === 'node'
                   ? 'Target: Node.js 18+ Backend | CommonJS Express bindings & Server Prelude'
+                  : codegenSubTab === 'c'
+                  ? 'Target: ANSI C / C11 Native Standalone | Portable C Target with Struct Tagged Unions'
+                  : codegenSubTab === 'cpp'
+                  ? 'Target: C++17 / C++20 Native Standalone | High-Performance STL, Algebraic Types & Zero Overhead'
                   : 'Target: Browser ES2022 | Virtual DOM Hyperscript, DOM Mount & Web Prelude'}
               </span>
               <span className="font-mono text-slate-500 text-[10px]">
@@ -1162,17 +1278,27 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                   ? `${llvmCode.split('\n').length} lines`
                   : codegenSubTab === 'node'
                   ? `${nodeCode.split('\n').length} lines`
+                  : codegenSubTab === 'c'
+                  ? `${cCode.split('\n').length} lines`
+                  : codegenSubTab === 'cpp'
+                  ? `${(cppCode || cCode).split('\n').length} lines`
                   : `${jsCode.split('\n').length} lines`}
               </span>
             </div>
 
-            <pre className={`bg-slate-950 p-4 rounded-lg border border-slate-800 text-purple-300 text-xs overflow-x-auto leading-relaxed max-h-[500px] font-mono ${
+            <pre className={`bg-slate-950 p-4 rounded-lg border border-slate-800 ${
+              codegenSubTab === 'c' ? 'text-blue-300' : codegenSubTab === 'cpp' ? 'text-sky-300' : 'text-purple-300'
+            } text-xs overflow-x-auto leading-relaxed max-h-[500px] font-mono ${
               isWordWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
             }`}>
               {codegenSubTab === 'llvm'
                 ? llvmCode
                 : codegenSubTab === 'node'
                 ? nodeCode
+                : codegenSubTab === 'c'
+                ? cCode
+                : codegenSubTab === 'cpp'
+                ? (cppCode || cCode)
                 : jsCode}
             </pre>
           </div>

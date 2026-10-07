@@ -107,6 +107,9 @@ export class JSCodeGenerator {
       'const $println = (v) => { console.log(typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)); return null; };',
       'const $to_string = (v) => typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);',
       'const $concat = (a, b) => String(a) + String(b);',
+      'const $parse_int = (s) => parseInt(String(s), 10);',
+      'const $parse_float = (s) => parseFloat(String(s));',
+      'const $time_now = () => Date.now();',
       'class __BreakSignal {}',
       'class __ContinueSignal {}',
       'class __ReturnSignal { constructor(v) { this.value = v; } }',
@@ -1094,7 +1097,7 @@ export class JSCodeGenerator {
 
       case 'e_var': {
         const isLocal = this.isLocalVar(expr.name);
-        const corePrimitives = ['print', 'println', 'to_string', 'concat'];
+        const corePrimitives = ['print', 'println', 'to_string', 'concat', 'parse_int', 'parse_float', 'time_now'];
         const stdModules = ['Math', 'Array', 'String', 'DOM', 'Node', 'Option', 'Result', 'Either', 'Reader', 'Writer', 'Task', 'IO', 'State', 'Setoid', 'Ord', 'Semigroup', 'SemiGroup', 'Monoid', 'Group', 'Functor', 'Contravariant', 'Applicative', 'Validation', 'Bifunctor', 'Profunctor', 'Foldable'];
 
         if (!isLocal && corePrimitives.includes(expr.name) && (!expr.modulePath || expr.modulePath.length === 0)) {

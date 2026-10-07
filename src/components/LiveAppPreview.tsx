@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Play,
+  Square,
   RotateCw,
   Smartphone,
   Tablet,
@@ -26,12 +27,14 @@ interface LiveAppPreviewProps {
   jsCode: string;
   onLoadCodeIntoEditor?: (code: string, testName: string) => void;
   isRunning?: boolean;
+  onStop?: () => void;
 }
 
 export const LiveAppPreview: React.FC<LiveAppPreviewProps> = ({
   jsCode,
   onLoadCodeIntoEditor,
-  isRunning = false
+  isRunning = false,
+  onStop
 }) => {
   const mountContainerRef = useRef<HTMLDivElement>(null);
   const [viewportMode, setViewportMode] = useState<'responsive' | 'desktop' | 'tablet' | 'mobile'>('responsive');
@@ -40,8 +43,18 @@ export const LiveAppPreview: React.FC<LiveAppPreviewProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'preview' | 'logs' | 'dom_inspect'>('preview');
   const [inspectHtml, setInspectHtml] = useState<string>('');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isStopped, setIsStopped] = useState<boolean>(false);
+
+  const handleStop = () => {
+    JSSandbox.cleanup();
+    setIsStopped(true);
+    if (onStop) {
+      onStop();
+    }
+  };
 
   const executeLiveSandbox = () => {
+    setIsStopped(false);
     if (!mountContainerRef.current) return;
     // Clear any previous sandbox intervals/listeners
     JSSandbox.cleanup();
@@ -250,13 +263,27 @@ export const LiveAppPreview: React.FC<LiveAppPreviewProps> = ({
             </button>
           </div>
 
-          {/* Re-run Button */}
+          {/* Re-run & Stop Buttons */}
           <button
             onClick={executeLiveSandbox}
             className="flex items-center space-x-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition cursor-pointer shadow-sm"
+            title="Re-run Interactive Preview"
           >
             <RotateCw className="w-3.5 h-3.5" />
             <span>Re-run</span>
+          </button>
+
+          <button
+            onClick={handleStop}
+            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-medium transition cursor-pointer shadow-sm ${
+              isStopped
+                ? 'bg-slate-800 text-rose-400 border border-rose-500/40'
+                : 'bg-rose-600 hover:bg-rose-500 text-white'
+            }`}
+            title="Stop Execution & Halt All Active Loops, Intervals & Audio (Escape)"
+          >
+            <Square className="w-3.5 h-3.5 fill-current text-white" />
+            <span>{isStopped ? 'Stopped' : 'Stop'}</span>
           </button>
 
           {/* Download HTML Button */}
@@ -297,12 +324,17 @@ export const LiveAppPreview: React.FC<LiveAppPreviewProps> = ({
                 </div>
                 <span className="font-mono text-slate-500 text-[10px]">TypeLang Sandboxed Web DOM Viewport</span>
               </div>
-              {sandboxResult && (
+              {isStopped ? (
+                <span className="text-[10px] font-mono text-rose-400 flex items-center space-x-1 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-800/50">
+                  <Square className="w-2.5 h-2.5 fill-current text-rose-400" />
+                  <span>Execution Halted</span>
+                </span>
+              ) : sandboxResult ? (
                 <span className="text-[10px] font-mono text-emerald-400 flex items-center space-x-1">
                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                   <span>{sandboxResult.executionTimeMs.toFixed(2)} ms</span>
                 </span>
-              )}
+              ) : null}
             </div>
 
             {/* Error banner if any */}

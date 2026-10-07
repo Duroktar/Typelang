@@ -12,8 +12,14 @@ export class JSSandbox {
   private static activeAnimationFrames: number[] = [];
   private static activeListeners: { target: any; type: string; listener: any; options?: any }[] = [];
 
+  public static isStopped = false;
+
   public static cleanup(): void {
+    JSSandbox.isStopped = true;
     if (typeof window !== 'undefined') {
+      const win = window as any;
+      win._tl_stopped = true;
+
       for (const id of JSSandbox.activeIntervals) {
         window.clearInterval(id);
       }
@@ -36,8 +42,7 @@ export class JSSandbox {
       }
       JSSandbox.activeListeners = [];
 
-      // Clean up any well-known global game loops or listeners
-      const win = window as any;
+      // Clean up any well-known global game loops, music loops, or listeners
       if (win._tl_pac_timer) {
         window.clearInterval(win._tl_pac_timer);
         win._tl_pac_timer = null;
@@ -50,12 +55,46 @@ export class JSSandbox {
         window.clearInterval(win._tl_gta_timer);
         win._tl_gta_timer = null;
       }
+      if (win._tl_tetris_timer) {
+        window.clearInterval(win._tl_tetris_timer);
+        win._tl_tetris_timer = null;
+      }
+      if (win._tl_outrun_timer) {
+        window.clearInterval(win._tl_outrun_timer);
+        win._tl_outrun_timer = null;
+      }
+      if (win._tl_music_loops) {
+        for (const k in win._tl_music_loops) {
+          try { window.clearInterval(win._tl_music_loops[k]); } catch (_) {}
+        }
+        win._tl_music_loops = {};
+      }
+      if (win._tl_actx) {
+        try {
+          if (win._tl_actx.state === 'running') {
+            win._tl_actx.suspend();
+          }
+        } catch (_) {}
+      }
+
+      // Safety sweep: clear any remaining timer IDs
+      try {
+        const highestId = window.setTimeout(() => {}, 0);
+        for (let i = highestId; i > Math.max(0, highestId - 250); i--) {
+          window.clearTimeout(i);
+          window.clearInterval(i);
+        }
+      } catch (_) {}
     }
   }
 
   public static execute(jsCode: string, mountTargetElement?: HTMLElement | null): JSRuntimeResult {
     // Cancel any previous sandbox loops/listeners before new execution
     JSSandbox.cleanup();
+    JSSandbox.isStopped = false;
+    if (typeof window !== 'undefined') {
+      (window as any)._tl_stopped = false;
+    }
 
     const stdout: string[] = [];
     let result: any = null;

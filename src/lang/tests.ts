@@ -4,9 +4,10 @@ import { TypeChecker } from './checker';
 import { Evaluator } from './evaluator';
 import { EXAMPLES } from './examples';
 import { formatTypeLangCode } from './formatter';
-import { getHoverInformation } from './lsp';
+import { getHoverInformation, getCompletionInformation } from './lsp';
 import { JSCodeGenerator } from './codegen_js';
 import { LLVMIRGenerator } from './codegen_llvm';
+import { CCodeGenerator } from './codegen_c';
 import { JSSandbox } from './js_runtime';
 import { Diagnostic } from './types';
 import { createDiagnosticFromError } from './diagnostics';
@@ -33,6 +34,7 @@ export interface TestCase {
   expectedErrorLines?: number[];
   expectedDiagnostics?: ExpectedDiagnostic[];
   expectedHover?: { line: number; col: number; contains: string | string[] };
+  expectedCompletion?: { line: number; col: number; contains: string | string[] };
   expectEvalResult?: (res: any) => boolean;
 }
 
@@ -2465,6 +2467,56 @@ let result = someTypoVariable + 5`,
       "Bifunctor Ok: 30",
       "Foldable.foldLeft: 10"
     ]
+  },
+  {
+    id: 'test_lsp_completion_imports_and_builtins',
+    name: 'LSP Autocomplete: Import Specifiers, In-scope Imports, and Builtin Functions',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies that LSP autocomplete accurately suggests imported symbols and standard builtins.',
+    code: `import Math.{ max, sqrt }
+let m = max(10, 20)
+println(to_string(m))`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['20'],
+    expectedCompletion: {
+      line: 2,
+      col: 6,
+      contains: ['max', 'math_max', 'math_min']
+    }
+  },
+  {
+    id: 'test_lsp_completion_multiline_imports',
+    name: 'LSP Autocomplete: Multi-line Import Specifiers',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies that multi-line import specifiers suggest module members across line breaks.',
+    code: `import Math.{
+  floor,
+  sqrt
+}
+println("ok")`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['ok'],
+    expectedCompletion: {
+      line: 3,
+      col: 5,
+      contains: ['sqrt']
+    }
+  },
+  {
+    id: 'test_lsp_completion_dom_and_timers',
+    name: 'LSP Autocomplete: DOM and Builtin Timer Functions',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies autocomplete for DOM members and root timer builtins like requestAnimationFrame.',
+    code: `import DOM.{ getElementById }
+let x = "done"
+println(x)`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['done'],
+    expectedCompletion: {
+      line: 2,
+      col: 1,
+      contains: ['getElementById', 'requestAnimationFrame', 'setInterval']
+    }
   }
 ];
 
@@ -2647,6 +2699,25 @@ export function runCompilerTestSuite(): TestResult[] {
           }
         }
 
+        // LSP Completion Sanity
+        if (passed && test.expectedCompletion) {
+          try {
+            const completions = getCompletionInformation(test.code, test.expectedCompletion.line, test.expectedCompletion.col);
+            const compLabels = completions.map(c => c.label);
+            const expectedItems = Array.isArray(test.expectedCompletion.contains)
+              ? test.expectedCompletion.contains
+              : [test.expectedCompletion.contains];
+            const missingCompletions = expectedItems.filter(expected => !compLabels.includes(expected));
+            if (missingCompletions.length > 0) {
+              passed = false;
+              failureReason = `Expected completion at ${test.expectedCompletion.line}:${test.expectedCompletion.col} to contain ${missingCompletions.map(item => `"${item}"`).join(', ')}, but got:\n${compLabels.slice(0, 20).join(', ')}`;
+            }
+          } catch (compErr: any) {
+            passed = false;
+            failureReason = `LSP completion lookup threw exception: ${compErr.message}`;
+          }
+        }
+
         // JS Sandbox
         if (passed) {
           try {
@@ -2678,6 +2749,27 @@ export function runCompilerTestSuite(): TestResult[] {
             failureReason = `LLVM IR generator threw exception: ${llvmErr.message}`;
           }
         }
+
+        // C & C++ Native Codegen
+        if (passed) {
+          try {
+            const cGen = new CCodeGenerator();
+            const emittedCpp = cGen.generate(ast, { target: 'cpp', includePrelude: true, includeMain: true });
+            if (!emittedCpp.includes('int main') || !emittedCpp.includes('namespace typelang')) {
+              passed = false;
+              failureReason = 'C++ code generator failed to emit valid main entry point or runtime namespace';
+            }
+
+            const emittedC = cGen.generate(ast, { target: 'c', includePrelude: true, includeMain: true });
+            if (!emittedC.includes('int main') || !emittedC.includes('typedef struct TL_Val')) {
+              passed = false;
+              failureReason = 'C code generator failed to emit valid main entry point or C tagged union definition';
+            }
+          } catch (cErr: any) {
+            passed = false;
+            failureReason = `C/C++ code generator threw exception: ${cErr.message}`;
+          }
+        }
       }
 
       const endTime = performance.now();
@@ -2695,7 +2787,7 @@ export function runCompilerTestSuite(): TestResult[] {
         details: passed
           ? (test.expectedTypeErrors > 0 || test.expectedParseError || test.expectedRuntimeError
               ? `Passed error verification: accurately detected ${typeErrorsCount} error(s) on line(s) [${actualErrorLines.join(', ')}] with expected message content.`
-              : 'Passed lexing, parsing, type checking, evaluation, formatter roundtrip, LSP hover, JS sandbox, and LLVM SSA generation.')
+              : 'Passed lexing, parsing, type checking, evaluation, formatter roundtrip, LSP hover, JS sandbox, LLVM SSA, and C/C++ native codegen.')
           : (failureReason || 'Verification failed')
       };
     } catch (err: any) {

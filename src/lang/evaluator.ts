@@ -88,6 +88,10 @@ export function createInitialRuntimeEnv(stdout: string[]): RuntimeEnv {
     }
   });
 
+  env.vars.set('parse_int', (s: any) => parseInt(String(s), 10));
+  env.vars.set('parse_float', (s: any) => parseFloat(String(s)));
+  env.vars.set('time_now', () => Date.now());
+
   // Standard Library Submodules
 
   // Math Module

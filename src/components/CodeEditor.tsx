@@ -13,6 +13,7 @@ import {
   Edit3,
   Trash2,
   Play,
+  Square,
   Crosshair,
   Layers,
   ArrowRight,
@@ -42,6 +43,8 @@ interface CodeEditorProps {
   code: string;
   onChange: (value: string) => void;
   onRun: () => void;
+  onStop?: () => void;
+  isRunning?: boolean;
   onFormat?: () => void;
   onApplyQuickFix?: (fix: QuickFix) => void;
   diagnostics: Diagnostic[];
@@ -52,6 +55,7 @@ interface CodeEditorProps {
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
   onOpenVSCodeModal?: () => void;
+  currentExampleName?: string;
 }
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({
@@ -64,6 +68,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   code,
   onChange,
   onRun,
+  onStop,
+  isRunning = false,
   onFormat,
   onApplyQuickFix,
   diagnostics,
@@ -73,7 +79,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   onSetSplitPct,
   isMaximized = false,
   onToggleMaximize,
-  onOpenVSCodeModal
+  onOpenVSCodeModal,
+  currentExampleName
 }) => {
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
@@ -537,7 +544,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     });
 
     completionProviderDisposable = monaco.languages.registerCompletionItemProvider('typelang', {
-      triggerCharacters: ['.'],
+      triggerCharacters: ['.', '{', ' ', ',', ':', '<', '"'],
       provideCompletionItems: (model: any, position: any) => {
         const word = model.getWordUntilPosition(position);
         const range = {
@@ -550,16 +557,41 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         const docCode = model.getValue();
         const workspace = getVirtualWorkspace(docCode);
         const dynamicCompletions = getCompletionInformation(workspace.combinedSource, position.lineNumber + workspace.offsetLine, position.column);
-        
-        let suggestions = [];
-        
-        if (dynamicCompletions.length > 0) {
-          suggestions = dynamicCompletions.map(field => ({
-            label: field,
-            kind: monaco.languages.CompletionItemKind.Field,
-            insertText: field,
-            documentation: `Property or method: ${field}`,
-            range
+
+        const mapKind = (kind?: string) => {
+          switch (kind) {
+            case 'function': return monaco.languages.CompletionItemKind.Function;
+            case 'method': return monaco.languages.CompletionItemKind.Method;
+            case 'variable': return monaco.languages.CompletionItemKind.Variable;
+            case 'type': return monaco.languages.CompletionItemKind.Class;
+            case 'module': return monaco.languages.CompletionItemKind.Module;
+            case 'keyword': return monaco.languages.CompletionItemKind.Keyword;
+            case 'snippet': return monaco.languages.CompletionItemKind.Snippet;
+            case 'constant': return monaco.languages.CompletionItemKind.Constant;
+            case 'constructor': return monaco.languages.CompletionItemKind.Constructor;
+            case 'property': return monaco.languages.CompletionItemKind.Property;
+            default: return monaco.languages.CompletionItemKind.Text;
+          }
+        };
+
+        let suggestions: any[] = [];
+
+        if (dynamicCompletions && dynamicCompletions.length > 0) {
+          suggestions = dynamicCompletions.map((item, index) => ({
+            label: item.label,
+            kind: mapKind(item.kind),
+            detail: item.detail,
+            documentation: item.documentation ? {
+              value: item.documentation,
+              isTrusted: true
+            } : undefined,
+            insertText: item.insertText ?? item.label,
+            insertTextRules: item.isSnippet
+              ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+              : undefined,
+            filterText: item.filterText,
+            range,
+            sortText: item.sortText || String(index).padStart(4, '0')
           }));
         } else {
           suggestions = [
@@ -808,6 +840,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       {/* Editor Controls & Layout Customization Bar */}
       <div className="bg-slate-900/70 px-3 sm:px-4 py-1.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
         <div className="flex items-center space-x-2 sm:space-x-2.5">
+          {currentExampleName && (
+            <div 
+              className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-[11px] font-semibold shrink-0"
+              title={`Active Loaded Example: ${currentExampleName}`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="truncate max-w-[180px] sm:max-w-[260px] font-bold">{currentExampleName}</span>
+            </div>
+          )}
+
           <button
             onClick={() => setUseFallbackTextarea(!useFallbackTextarea)}
             className="text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold uppercase tracking-wider transition border border-slate-700 cursor-pointer"
@@ -907,9 +949,23 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           <button
             onClick={onRun}
             className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg border border-emerald-500/20 transition-all text-[11px] font-bold uppercase tracking-wider cursor-pointer shadow-sm"
+            title="Run Active TypeLang Program (Ctrl+Enter)"
           >
             <Play className="w-3 h-3 fill-current" />
             <span>Run</span>
+          </button>
+
+          <button
+            onClick={onStop}
+            className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border transition-all text-[11px] font-bold uppercase tracking-wider cursor-pointer shadow-sm ${
+              isRunning
+                ? 'bg-rose-600/30 hover:bg-rose-600/40 text-rose-300 border-rose-500/50 animate-pulse'
+                : 'bg-slate-800/80 hover:bg-rose-950/40 hover:text-rose-300 text-slate-400 border-slate-700/80'
+            }`}
+            title="Stop Running Code & Terminate All Loops/Audio (Escape)"
+          >
+            <Square className="w-3 h-3 fill-current text-rose-400" />
+            <span>Stop</span>
           </button>
 
           {onFormat && (
@@ -1006,7 +1062,15 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               padding: { top: 12, bottom: 12 },
               automaticLayout: true,
               tabSize: 2,
-              lineNumbersMinChars: 3
+              lineNumbersMinChars: 3,
+              quickSuggestions: {
+                other: true,
+                comments: false,
+                strings: false
+              },
+              suggestOnTriggerCharacters: true,
+              acceptSuggestionOnEnter: 'on',
+              tabCompletion: 'on'
             }}
           />
         )}

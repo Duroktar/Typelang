@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, ChevronUp, ChevronDown, X, Clock, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Terminal, ChevronUp, ChevronDown, X, Clock, AlertCircle, CheckCircle2, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MiniConsoleProps {
@@ -7,9 +7,11 @@ interface MiniConsoleProps {
   executionTimeMs?: number;
   error?: string | null;
   onClear: () => void;
+  onStop?: () => void;
+  isRunning?: boolean;
 }
 
-export const MiniConsole: React.FC<MiniConsoleProps> = ({ stdout, executionTimeMs, error, onClear }) => {
+export const MiniConsole: React.FC<MiniConsoleProps> = ({ stdout, executionTimeMs, error, onClear, onStop, isRunning }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -39,7 +41,17 @@ export const MiniConsole: React.FC<MiniConsoleProps> = ({ stdout, executionTimeM
             </span>
           )}
         </div>
-        <div className="flex items-center space-x-1">
+        <div className="flex items-center space-x-1.5">
+          {onStop && (
+            <button
+              onClick={onStop}
+              className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/60 flex items-center space-x-1 transition-colors cursor-pointer"
+              title="Stop Execution & Halt Loops/Audio (Escape)"
+            >
+              <Square className="w-2.5 h-2.5 fill-current text-rose-400" />
+              <span>Stop</span>
+            </button>
+          )}
           <button 
             onClick={() => setIsExpanded(!isExpanded)}
             className="p-1 hover:bg-slate-800 rounded text-slate-500 transition-colors"
@@ -49,6 +61,7 @@ export const MiniConsole: React.FC<MiniConsoleProps> = ({ stdout, executionTimeM
           <button 
             onClick={onClear}
             className="p-1 hover:bg-slate-800 rounded text-slate-500 transition-colors"
+            title="Clear Console"
           >
             <X className="w-3.5 h-3.5" />
           </button>

@@ -1,9 +1,21 @@
 import { Lexer } from './lexer';
 import { Parser } from './parser';
-import { TypeChecker, TypeEnv, ScopeSymbol } from './checker';
+import { TypeChecker, TypeEnv, ScopeSymbol, createInitialEnv } from './checker';
 import { typeToString, Type, TFun, TRec, TPoly, TCons, kindArity, prune } from './types';
 import { GADTConstructor, getTypeParamName, TypeParam, typeParamToString } from './ast';
 import { Formatter } from './formatter';
+import { STDLIB_MODULES, getRootBuiltinDoc } from './stdlibDocs';
+
+export interface CompletionItem {
+  label: string;
+  kind: 'function' | 'method' | 'variable' | 'module' | 'keyword' | 'snippet' | 'type' | 'constructor' | 'property' | 'constant';
+  detail?: string;
+  documentation?: string;
+  insertText?: string;
+  isSnippet?: boolean;
+  sortText?: string;
+  filterText?: string;
+}
 
 export interface HoverResult {
   contents: string[];
@@ -571,21 +583,44 @@ export function findMatchingSymbol(
  * Resolve a reference symbol back to its definition symbol to inherit documentation and signatures.
  */
 export function resolveReferenceSymbol(matchedSymbol: ScopeSymbol, symbols: ScopeSymbol[]): ScopeSymbol {
-  if (matchedSymbol.kind === 'reference' && matchedSymbol.scopeRange) {
-    const defSymbol = symbols.find(s =>
-      s.name === matchedSymbol.name &&
-      s.kind !== 'reference' &&
-      s.loc &&
-      s.loc.line === matchedSymbol.scopeRange!.startLine &&
-      s.loc.col === matchedSymbol.scopeRange!.startCol
-    );
+  if (matchedSymbol.kind === 'reference') {
+    let defSymbol: ScopeSymbol | undefined;
+    if (matchedSymbol.scopeRange) {
+      defSymbol = symbols.find(s =>
+        s.name === matchedSymbol.name &&
+        s.kind !== 'reference' &&
+        s.loc &&
+        s.loc.line === matchedSymbol.scopeRange!.startLine &&
+        s.loc.col === matchedSymbol.scopeRange!.startCol
+      );
+      if (!defSymbol) {
+        defSymbol = symbols.find(s =>
+          s.name === matchedSymbol.name &&
+          s.kind !== 'reference' &&
+          s.loc &&
+          s.loc.line === matchedSymbol.scopeRange!.startLine
+        );
+      }
+    }
+    if (!defSymbol) {
+      const candidates = symbols.filter(s =>
+        s.name === matchedSymbol.name &&
+        s.kind !== 'reference' &&
+        s.loc
+      );
+      if (candidates.length > 0) {
+        const refLine = matchedSymbol.loc?.line ?? Infinity;
+        const preceding = candidates.filter(s => s.loc!.line <= refLine);
+        defSymbol = preceding.length > 0 ? preceding[preceding.length - 1] : candidates[0];
+      }
+    }
     if (defSymbol) {
       return {
         ...matchedSymbol,
         kind: defSymbol.kind,
         doc: defSymbol.doc || matchedSymbol.doc,
-        isExported: defSymbol.isExported,
-        containerName: defSymbol.containerName,
+        isExported: defSymbol.isExported ?? matchedSymbol.isExported,
+        containerName: defSymbol.containerName ?? matchedSymbol.containerName,
         type: defSymbol.type || matchedSymbol.type,
       };
     }
@@ -704,12 +739,23 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
       } else if (matchedSymbol.kind === 'function') {
         contents.push('```typelang\nfunction ' + word + ': ' + typeStr + '\n```');
         contents.push(matchedSymbol.isExported ? '*Exported function*' : '*Function definition*');
+      } else if (matchedSymbol.kind === 'reference') {
+        const isFun = matchedSymbol.type && (matchedSymbol.type.kind === 'fun' || (matchedSymbol.type.kind === 'poly' && matchedSymbol.type.type.kind === 'fun'));
+        if (isFun) {
+          contents.push('```typelang\nfunction ' + word + ': ' + typeStr + '\n```');
+          contents.push(matchedSymbol.isExported ? '*Exported function*' : '*Function*');
+        } else {
+          const prefix = matchedSymbol.isMut ? 'let mut' : 'let';
+          contents.push('```typelang\n' + prefix + ' ' + word + ': ' + typeStr + '\n```');
+          contents.push(matchedSymbol.isExported ? '*Exported variable*' : '*Variable*');
+        }
       } else {
         contents.push('```typelang\n' + matchedSymbol.kind + ' ' + word + ': ' + typeStr + '\n```');
       }
 
-      if (matchedSymbol.doc) {
-        contents.push(matchedSymbol.doc);
+      const docText = matchedSymbol.doc || env.docs?.get(word) || getRootBuiltinDoc(word) || BUILTIN_HOVER_DB[word]?.doc;
+      if (docText) {
+        contents.push(docText);
       }
       return { contents, word };
     }
@@ -1236,79 +1282,761 @@ export function getAllSymbolsFromTypeEnv(typeEnv: TypeEnv | null): {
 /**
  * Extract autocompletion suggestions based on current cursor position
  */
-export function getCompletionInformation(code: string, line: number, col: number): string[] {
+export function getCompletionInformation(code: string, line: number, col: number): CompletionItem[] {
   const lines = code.split('\n');
   if (line < 1 || line > lines.length) return [];
   const lineText = lines[line - 1].substring(0, col - 1);
-  const regex = /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\.\s*([a-zA-Z0-9_]*)$/;
-  const match = lineText.match(regex);
-  if (!match) return [];
-  
-  const objectChain = match[1].split('.');
-  const prefix = match[2];
-  
-  const lexer = new Lexer(code);
-  const parser = new Parser(lexer.tokenize());
-  let ast;
+
+  // Discover user-defined modules even if code has syntax errors
+  const userModuleMatches = code.matchAll(/\bmodule\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
+  const discoveredUserModules = new Set<string>();
+  for (const m of userModuleMatches) {
+    discoveredUserModules.add(m[1]);
+  }
+
+  // Parse resiliently
+  let ast: any = { statements: [] };
   try {
+    const lexer = new Lexer(code);
+    const parser = new Parser(lexer.tokenize());
     ast = parser.parseProgram(true);
   } catch (e: any) {
-    if (e.program) ast = e.program;
-    else return [];
+    if (e && e.program) ast = e.program;
   }
-  
+
   const checker = new TypeChecker();
-  // silence errors for completion check
   (checker as any).addError = () => {};
-  const env = checker.checkProgram(ast);
-  
-  const rootName = objectChain[0];
-  let currentType: Type | undefined;
-  
-  if (env.modules.has(rootName)) {
-     let modEnv = env.modules.get(rootName)!;
-     for (let i = 1; i < objectChain.length; i++) {
+  let env: TypeEnv;
+  try {
+    env = checker.checkProgram(ast);
+  } catch {
+    env = createInitialEnv();
+  }
+
+  function getModuleExports(modName: string): CompletionItem[] {
+    const items: CompletionItem[] = [];
+    const seen = new Set<string>();
+
+    const modEnv = env.modules.get(modName);
+    if (modEnv) {
+      const exportNames = new Set<string>(modEnv.exports);
+      if (exportNames.size === 0) {
+        for (const k of modEnv.vars.keys()) exportNames.add(k);
+        for (const k of modEnv.gadts.keys()) exportNames.add(k);
+        for (const k of modEnv.typeAliases.keys()) exportNames.add(k);
+      }
+
+      for (const name of exportNames) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+
+        const ty = modEnv.vars.get(name);
+        let kind: CompletionItem['kind'] = 'function';
+        let detail = `member of ${modName}`;
+        if (ty) {
+          const isFun = ty.kind === 'fun' || (ty.kind === 'poly' && ty.type.kind === 'fun');
+          kind = isFun ? 'function' : 'constant';
+          detail = `${name}: ${typeToString(ty)}`;
+        } else if (modEnv.gadts.has(name) || modEnv.typeAliases.has(name)) {
+          kind = 'type';
+          detail = `type ${name}`;
+        }
+
+        let doc = modEnv.docs?.get(name) || BUILTIN_HOVER_DB[name]?.doc || BUILTIN_HOVER_DB[`${modName}.${name}`]?.doc;
+        if (!doc) {
+          const stdMod = STDLIB_MODULES.find(m => m.name === modName);
+          const stdFn = stdMod?.functions.find(f => f.name === name);
+          if (stdFn) {
+            doc = stdFn.description;
+            if (!detail || detail.startsWith('member of')) detail = stdFn.signature;
+          }
+        }
+
+        items.push({
+          label: name,
+          kind,
+          detail,
+          documentation: doc || `Exported ${kind} \`${name}\` from module \`${modName}\`.`,
+          insertText: name
+        });
+      }
+
+      for (const gName of modEnv.gadts.keys()) {
+        if (!seen.has(gName)) {
+          seen.add(gName);
+          items.push({
+            label: gName,
+            kind: 'type',
+            detail: `type ${gName}`,
+            documentation: `GADT type \`${gName}\` from module \`${modName}\`.`,
+            insertText: gName
+          });
+        }
+      }
+
+      for (const tName of modEnv.typeAliases.keys()) {
+        if (!seen.has(tName)) {
+          seen.add(tName);
+          items.push({
+            label: tName,
+            kind: 'type',
+            detail: `type ${tName}`,
+            documentation: `Type alias \`${tName}\` from module \`${modName}\`.`,
+            insertText: tName
+          });
+        }
+      }
+    }
+
+    // Enrich from STDLIB_MODULES
+    const stdMod = STDLIB_MODULES.find(m => m.name === modName);
+    if (stdMod) {
+      for (const fn of stdMod.functions) {
+        if (!seen.has(fn.name)) {
+          seen.add(fn.name);
+          items.push({
+            label: fn.name,
+            kind: 'function',
+            detail: fn.signature,
+            documentation: fn.description,
+            insertText: fn.name
+          });
+        }
+      }
+      if (modName === 'Option') {
+        if (!seen.has('Some')) items.push({ label: 'Some', kind: 'constructor', detail: 'Some<a>(val: a): Option<a>', documentation: 'Constructs an Option containing a value.', insertText: 'Some' });
+        if (!seen.has('None')) items.push({ label: 'None', kind: 'constructor', detail: 'None: Option<a>', documentation: 'Represents the empty Option variant.', insertText: 'None' });
+      } else if (modName === 'Result') {
+        if (!seen.has('Ok')) items.push({ label: 'Ok', kind: 'constructor', detail: 'Ok<a, e>(val: a): Result<a, e>', documentation: 'Constructs a success Result value.', insertText: 'Ok' });
+        if (!seen.has('Err')) items.push({ label: 'Err', kind: 'constructor', detail: 'Err<a, e>(err: e): Result<a, e>', documentation: 'Constructs an error Result value.', insertText: 'Err' });
+      } else if (modName === 'Either') {
+        if (!seen.has('Left')) items.push({ label: 'Left', kind: 'constructor', detail: 'Left<l, r>(left: l): Either<l, r>', insertText: 'Left' });
+        if (!seen.has('Right')) items.push({ label: 'Right', kind: 'constructor', detail: 'Right<l, r>(right: r): Either<l, r>', insertText: 'Right' });
+      } else if (modName === 'Validation') {
+        if (!seen.has('Valid')) items.push({ label: 'Valid', kind: 'constructor', detail: 'Valid<a>(val: a): Validation<a>', insertText: 'Valid' });
+        if (!seen.has('Invalid')) items.push({ label: 'Invalid', kind: 'constructor', detail: 'Invalid<a>(errs: [string]): Validation<a>', insertText: 'Invalid' });
+      }
+    }
+
+    return items;
+  }
+
+  function getAllModules(): CompletionItem[] {
+    const modules: CompletionItem[] = [];
+    const seen = new Set<string>();
+
+    for (const stdMod of STDLIB_MODULES) {
+      seen.add(stdMod.name);
+      modules.push({
+        label: stdMod.name,
+        kind: 'module',
+        detail: `module ${stdMod.name} (${stdMod.category})`,
+        documentation: `${stdMod.tagline}\n\n${stdMod.description}`,
+        insertText: stdMod.name
+      });
+    }
+
+    for (const modName of env.modules.keys()) {
+      if (!seen.has(modName)) {
+        seen.add(modName);
+        modules.push({
+          label: modName,
+          kind: 'module',
+          detail: `module ${modName}`,
+          documentation: env.modules.get(modName)?.moduleDoc || `Module namespace \`${modName}\`.`,
+          insertText: modName
+        });
+      }
+    }
+
+    for (const userMod of discoveredUserModules) {
+      if (!seen.has(userMod)) {
+        seen.add(userMod);
+        modules.push({
+          label: userMod,
+          kind: 'module',
+          detail: `module ${userMod}`,
+          documentation: `User-defined module \`${userMod}\`.`,
+          insertText: userMod
+        });
+      }
+    }
+
+    return modules;
+  }
+
+  // 1. Inside import member list: import ModuleName.{ ... (supports single- and multi-line imports)
+  const fullTextBeforeCursor = lines.slice(0, line - 1).join('\n') + (line > 1 ? '\n' : '') + lineText;
+  const importMembersMatch = fullTextBeforeCursor.match(/import\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\.\s*\{([^}]*)$/);
+  if (importMembersMatch) {
+    const modName = importMembersMatch[1];
+    const inner = importMembersMatch[2];
+    const parts = inner.split(',');
+    const currentPrefix = parts[parts.length - 1].trim().toLowerCase();
+    const alreadyImported = new Set(parts.slice(0, -1).map(p => p.trim()).filter(Boolean));
+
+    const exports = getModuleExports(modName);
+    const results: CompletionItem[] = [];
+
+    if (!alreadyImported.has('*') && ('*'.startsWith(currentPrefix) || currentPrefix === '')) {
+      results.push({
+        label: '*',
+        kind: 'keyword',
+        detail: `Import all exports from ${modName}`,
+        documentation: `Imports every exported member of \`${modName}\` into current scope.`,
+        insertText: '*',
+        filterText: '*',
+        sortText: '0_*'
+      });
+    }
+
+    for (const exp of exports) {
+      if (alreadyImported.has(exp.label)) continue;
+      if (currentPrefix === '' || exp.label.toLowerCase().includes(currentPrefix)) {
+        const isPrefix = exp.label.toLowerCase().startsWith(currentPrefix);
+        results.push({
+          ...exp,
+          filterText: exp.label,
+          sortText: isPrefix ? `0_${exp.label}` : `1_${exp.label}`
+        });
+      }
+    }
+
+    return results;
+  }
+
+  // 2. Right after import ModuleName. (after dot before {)
+  const importDotMatch = lineText.match(/import\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.\s*([a-zA-Z0-9_{]*)$/);
+  if (importDotMatch) {
+    const modName = importDotMatch[1];
+    const dotPrefix = importDotMatch[2].toLowerCase();
+    const results: CompletionItem[] = [
+      {
+        label: '{ ... }',
+        kind: 'snippet',
+        detail: `Import specifiers from ${modName}`,
+        insertText: '{ ${1:members} }',
+        isSnippet: true,
+        filterText: '{',
+        documentation: `Selectively import members from \`${modName}\`.`,
+        sortText: '0_0'
+      },
+      {
+        label: '{ * }',
+        kind: 'snippet',
+        detail: `Import all exports from ${modName}`,
+        insertText: '{ * }',
+        filterText: '{*',
+        documentation: `Import every exported member of \`${modName}\`.`,
+        sortText: '0_1'
+      }
+    ];
+
+    const exports = getModuleExports(modName);
+    for (const exp of exports) {
+      if (dotPrefix === '' || exp.label.toLowerCase().includes(dotPrefix) || `{ ${exp.label} }`.toLowerCase().includes(dotPrefix)) {
+        const isPrefix = exp.label.toLowerCase().startsWith(dotPrefix);
+        results.push({
+          ...exp,
+          label: exp.label,
+          detail: `import ${modName}.{ ${exp.label} }`,
+          insertText: `{ ${exp.label} }`,
+          filterText: exp.label,
+          sortText: isPrefix ? `0_${exp.label}` : `1_${exp.label}`
+        });
+        results.push({
+          ...exp,
+          label: `{ ${exp.label} }`,
+          detail: `import ${modName}.{ ${exp.label} }`,
+          insertText: `{ ${exp.label} }`,
+          filterText: `{ ${exp.label} }`,
+          sortText: isPrefix ? `0_z_${exp.label}` : `1_z_${exp.label}`
+        });
+      }
+    }
+    return results;
+  }
+
+  // 3. Right after import or typing module name: import M...
+  const importModMatch = lineText.match(/import\s+([a-zA-Z0-9_]*)$/);
+  if (importModMatch) {
+    const modPrefix = importModMatch[1].toLowerCase();
+    const allMods = getAllModules();
+    const results: CompletionItem[] = [];
+
+    for (const mod of allMods) {
+      if (modPrefix === '' || mod.label.toLowerCase().includes(modPrefix)) {
+        const isPrefix = mod.label.toLowerCase().startsWith(modPrefix);
+        results.push({
+          ...mod,
+          filterText: mod.label,
+          sortText: isPrefix ? `0_${mod.label}` : `1_${mod.label}`
+        });
+        results.push({
+          label: `${mod.label}.{ ... }`,
+          kind: 'snippet',
+          detail: `import ${mod.label}.{ members }`,
+          insertText: `${mod.label}.{ \${1:members} }`,
+          isSnippet: true,
+          filterText: `${mod.label} import`,
+          documentation: `Import members from \`${mod.label}\`.\n\n${mod.documentation || ''}`,
+          sortText: isPrefix ? `0_${mod.label}_0` : `1_${mod.label}_0`
+        });
+        results.push({
+          label: `${mod.label}.{ * }`,
+          kind: 'snippet',
+          detail: `import ${mod.label}.{ * }`,
+          insertText: `${mod.label}.{ * }`,
+          filterText: `${mod.label} *`,
+          documentation: `Import all exports from \`${mod.label}\`.\n\n${mod.documentation || ''}`,
+          sortText: isPrefix ? `0_${mod.label}_1` : `1_${mod.label}_1`
+        });
+      }
+    }
+
+    return results;
+  }
+
+  // 3b. TypeScript style import { ...
+  const importBracesMatch = lineText.match(/import\s*\{\s*([a-zA-Z0-9_]*)$/);
+  if (importBracesMatch) {
+    const bracePrefix = importBracesMatch[1].toLowerCase();
+    const allMods = getAllModules();
+    const results: CompletionItem[] = [];
+    for (const mod of allMods) {
+      if (bracePrefix === '' || mod.label.toLowerCase().includes(bracePrefix)) {
+        results.push({
+          label: `${mod.label}.{ ... }`,
+          kind: 'snippet',
+          detail: `TypeLang uses: import ${mod.label}.{ members }`,
+          insertText: `${mod.label}.{ \${1:members} }`,
+          isSnippet: true,
+          documentation: `In TypeLang, module imports follow \`import ${mod.label}.{ members }\` syntax.`,
+          sortText: `0_${mod.label}`
+        });
+      }
+    }
+    return results;
+  }
+
+  // 4. Dot member access on object chain: expr.prop or Module.prop
+  const dotMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\.\s*([a-zA-Z0-9_]*)$/);
+  if (dotMatch) {
+    const objectChain = dotMatch[1].split('.');
+    const propPrefix = dotMatch[2].toLowerCase();
+    const rootName = objectChain[0];
+
+    // Check if rootName is a module
+    if (env.modules.has(rootName) || STDLIB_MODULES.some(m => m.name === rootName) || discoveredUserModules.has(rootName)) {
+      let currentModEnv: TypeEnv | undefined = env.modules.get(rootName);
+      let currentModName = rootName;
+      for (let i = 1; i < objectChain.length; i++) {
         const seg = objectChain[i];
-        if (modEnv.modules.has(seg)) modEnv = modEnv.modules.get(seg)!;
-        else if (modEnv.vars.has(seg)) {
-           currentType = prune(modEnv.vars.get(seg)!);
-           break;
+        if (currentModEnv?.modules.has(seg)) {
+          currentModEnv = currentModEnv.modules.get(seg);
+          currentModName = seg;
         }
-     }
-     if (!currentType) {
-        const results = [];
-        for (const exp of modEnv.exports) {
-           if (exp.startsWith(prefix)) {
-              results.push(exp);
-           }
-        }
-        return results;
-     }
-  } else {
-     let sym = null;
-     for (let i = checker.symbols.length - 1; i >= 0; i--) {
-        if (checker.symbols[i].name === rootName) {
-           sym = checker.symbols[i];
-           break;
-        }
-     }
-     if (!sym) return [];
-     currentType = prune(sym.type);
-     
-     for (let i = 1; i < objectChain.length; i++) {
+      }
+      const exports = getModuleExports(currentModName);
+      return exports
+        .filter(e => propPrefix === '' || e.label.toLowerCase().includes(propPrefix))
+        .map(e => ({
+          ...e,
+          sortText: e.label.toLowerCase().startsWith(propPrefix) ? `0_${e.label}` : `1_${e.label}`
+        }));
+    }
+
+    // Check in-scope symbols (record, object)
+    let sym: any = null;
+    for (let i = checker.symbols.length - 1; i >= 0; i--) {
+      if (checker.symbols[i].name === rootName) {
+        sym = checker.symbols[i];
+        break;
+      }
+    }
+    if (!sym && env.vars.has(rootName)) {
+      sym = { name: rootName, type: env.vars.get(rootName)!, kind: 'variable' };
+    }
+
+    if (sym) {
+      let currentType: Type = prune(sym.type);
+      for (let i = 1; i < objectChain.length; i++) {
         const prop = objectChain[i];
-        if (currentType.kind === "rec") {
-           const field = currentType.fields.find(f => f.name === prop);
-           if (!field) return [];
-           currentType = prune(field.type);
+        if (currentType.kind === 'rec') {
+          const field = currentType.fields.find(f => f.name === prop);
+          if (!field) return [];
+          currentType = prune(field.type);
         } else {
-           return [];
+          return [];
         }
-     }
+      }
+
+      if (currentType.kind === 'rec') {
+        return currentType.fields
+          .filter(f => propPrefix === '' || f.name.toLowerCase().includes(propPrefix))
+          .map(f => {
+            const isFun = f.type.kind === 'fun';
+            return {
+              label: f.name,
+              kind: isFun ? 'method' : 'property',
+              detail: `${f.name}: ${typeToString(f.type)}`,
+              documentation: `Record field \`${f.name}\``,
+              insertText: f.name,
+              sortText: f.name.toLowerCase().startsWith(propPrefix) ? `0_${f.name}` : `1_${f.name}`
+            };
+          });
+      }
+    }
+
+    return [];
   }
-  
-  if (currentType && currentType.kind === "rec") {
-     return currentType.fields.map(f => f.name).filter(n => n.startsWith(prefix));
+
+  // 5. General scope: Built-ins, In-scope symbols, Modules, Types, Keywords & Snippets
+  const identMatch = lineText.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/);
+  const prefix = identMatch ? identMatch[1].toLowerCase() : '';
+
+  const results: CompletionItem[] = [];
+  const seenLabels = new Set<string>();
+
+  const add = (item: CompletionItem) => {
+    if (!seenLabels.has(item.label)) {
+      seenLabels.add(item.label);
+      const lower = item.label.toLowerCase();
+      if (prefix === '' || lower.includes(prefix)) {
+        const isPrefixMatch = prefix !== '' && lower.startsWith(prefix);
+        results.push({
+          ...item,
+          sortText: item.sortText || (isPrefixMatch ? `0_${item.label}` : `1_${item.label}`)
+        });
+      }
+    }
+  };
+
+  // A. In-scope environment variables (includes imported functions/values, top-level lets/functions, and root builtins)
+  for (const [varName, varType] of env.vars.entries()) {
+    if (varName.startsWith('__')) continue;
+    const isFun = varType.kind === 'fun' || (varType.kind === 'poly' && varType.type.kind === 'fun');
+    const doc = env.docs?.get(varName) || getRootBuiltinDoc(varName) || BUILTIN_HOVER_DB[varName]?.doc;
+    add({
+      label: varName,
+      kind: isFun ? 'function' : 'variable',
+      detail: `${varName}: ${typeToString(varType)}`,
+      documentation: doc || `In-scope ${isFun ? 'function' : 'variable'} \`${varName}\`.`,
+      insertText: varName
+    });
   }
-  return [];
+
+  // B. In-scope GADTs & constructors from environment
+  for (const [gName, gVal] of env.gadts.entries()) {
+    add({
+      label: gName,
+      kind: 'type',
+      detail: `type ${gName}`,
+      documentation: `GADT type \`${gName}\`.`,
+      insertText: gName
+    });
+    for (const ctor of gVal.constructors) {
+      add({
+        label: ctor.name,
+        kind: 'constructor',
+        detail: `constructor ${ctor.name}`,
+        documentation: `Constructor for GADT \`${gName}\`.`,
+        insertText: ctor.name
+      });
+    }
+  }
+
+  // C. In-scope type aliases from environment
+  for (const [tName] of env.typeAliases.entries()) {
+    add({
+      label: tName,
+      kind: 'type',
+      detail: `type ${tName}`,
+      documentation: `Type alias \`${tName}\`.`,
+      insertText: tName
+    });
+  }
+
+  // D. Built-in functions (root builtins, including math, string, array, timer, and I/O helpers)
+  const rootBuiltins = [
+    { label: 'print', detail: 'function print<T>(val: T): void', doc: 'Prints a value to standard output without adding a trailing newline.' },
+    { label: 'println', detail: 'function println<T>(val: T): void', doc: 'Prints a value to standard output followed by a trailing newline.' },
+    { label: 'to_string', detail: 'function to_string<T>(val: T): string', doc: 'Converts any value (number, boolean, record, tuple) into its canonical string representation.' },
+    { label: 'concat', detail: 'function concat(a: string, b: string): string', doc: 'Concatenates two string values into a single string.' },
+    { label: 'requestAnimationFrame', detail: 'function requestAnimationFrame(callback: () => void): void', doc: 'Schedules a callback for the next animation frame in browser runtimes.' },
+    { label: 'setInterval', detail: 'function setInterval(callback: () => void, ms: number): number', doc: 'Repeatedly invokes a callback at the requested millisecond interval.' },
+    { label: 'clearInterval', detail: 'function clearInterval(handle: number): void', doc: 'Cancels a repeating timer created by setInterval.' },
+    { label: 'setTimeout', detail: 'function setTimeout(callback: () => void, ms: number): number', doc: 'Schedules a callback to run once after a delay.' },
+    { label: 'clearTimeout', detail: 'function clearTimeout(handle: number): void', doc: 'Cancels a pending one-shot timer created by setTimeout.' },
+    { label: 'time_now', detail: 'function time_now(): number', doc: 'Returns the current UNIX timestamp in milliseconds.' },
+    { label: 'parse_int', detail: 'function parse_int(s: string): number', doc: 'Parses an integer number from a string representation.' },
+    { label: 'parse_float', detail: 'function parse_float(s: string): number', doc: 'Parses a floating-point number from a string representation.' },
+    { label: 'math_sqrt', detail: 'function math_sqrt(x: number): number', doc: 'Returns the square root of a non-negative number.' },
+    { label: 'math_abs', detail: 'function math_abs(x: number): number', doc: 'Returns the absolute value of a number.' },
+    { label: 'math_floor', detail: 'function math_floor(x: number): number', doc: 'Rounds a floating point number down to the nearest integer.' },
+    { label: 'math_ceil', detail: 'function math_ceil(x: number): number', doc: 'Rounds a floating point number up to the nearest integer.' },
+    { label: 'math_round', detail: 'function math_round(x: number): number', doc: 'Rounds a number to the nearest integer.' },
+    { label: 'math_min', detail: 'function math_min(a: number, b: number): number', doc: 'Returns the minimum of two numbers.' },
+    { label: 'math_max', detail: 'function math_max(a: number, b: number): number', doc: 'Returns the maximum of two numbers.' },
+    { label: 'math_pow', detail: 'function math_pow(base: number, exp: number): number', doc: 'Calculates base raised to the power of exp.' },
+    { label: 'math_random', detail: 'function math_random(): number', doc: 'Generates a random floating-point number between 0 and 1.' },
+    { label: 'str_len', detail: 'function str_len(s: string): number', doc: 'Returns the character length of a string.' },
+    { label: 'str_slice', detail: 'function str_slice(s: string, start: number, end: number): string', doc: 'Extracts a substring slice.' },
+    { label: 'str_split', detail: 'function str_split(s: string, delimiter: string): [string]', doc: 'Splits a string by a delimiter into an array of substrings.' },
+    { label: 'str_contains', detail: 'function str_contains(s: string, substring: string): boolean', doc: 'Checks if a string contains a given substring.' },
+    { label: 'array_len', detail: 'function array_len<T>(arr: [T]): number', doc: 'Returns the number of elements in an array.' },
+    { label: 'array_map', detail: 'function array_map<A, B>(arr: [A], fn: (x: A) => B): [B]', doc: 'Transforms each element in an array using a mapper callback.' },
+    { label: 'array_filter', detail: 'function array_filter<A>(arr: [A], predicate: (x: A) => boolean): [A]', doc: 'Filters array elements matching a boolean predicate.' },
+    { label: 'array_reduce', detail: 'function array_reduce<A, B>(arr: [A], initial: B, reducer: (acc: B, elem: A) => B): B', doc: 'Reduces an array to a single accumulated value.' },
+    { label: 'array_push', detail: 'function array_push<A>(arr: [A], elem: A): [A]', doc: 'Appends an element to the end of an array.' },
+    { label: 'h', detail: 'function h(tag: string, props: any, children: [any]): any', doc: 'Creates a Virtual DOM node element with tag, properties/event handlers, and children.' },
+    { label: 'mount', detail: 'function mount(containerId: string, vnode: any): void', doc: 'Mounts a TypeLang Virtual DOM tree into the specified DOM element container ID.' },
+    { label: 'getElementById', detail: 'function getElementById(id: string): any', doc: 'Retrieves a DOM element handle by its HTML element ID.' },
+    { label: 'createElement', detail: 'function createElement(tag: string): any', doc: 'Creates a new DOM element with the given HTML tag name.' },
+    { label: 'playTone', detail: 'function playTone(freq: number, duration: number, waveType: string, volume: number): void', doc: 'Plays an audio tone through Web Audio API.' },
+    { label: 'playRamp', detail: 'function playRamp(startFreq: number, endFreq: number, duration: number, waveType: string, volume: number): void', doc: 'Plays a frequency sweep/ramp sound.' },
+    { label: 'playSequence', detail: 'function playSequence(notes: [number], noteDuration: number, waveType: string, volume: number): void', doc: 'Plays an ordered sequence of note frequencies.' },
+    { label: 'confetti', detail: 'function confetti(count: number, spread: number, originY: number): void', doc: 'Triggers a colorful particle confetti celebration on screen.' }
+  ];
+  for (const b of rootBuiltins) {
+    add({
+      label: b.label,
+      kind: 'function',
+      detail: b.detail,
+      documentation: b.doc,
+      insertText: b.label,
+      filterText: b.label
+    });
+  }
+
+  // E. Built-in modules
+  for (const mod of getAllModules()) {
+    add({
+      ...mod,
+      filterText: mod.label
+    });
+  }
+
+  // F. Qualified standard library functions (e.g. Math.sqrt, DOM.getElementById, Array.map)
+  for (const stdMod of STDLIB_MODULES) {
+    for (const fn of stdMod.functions) {
+      const qualified = `${stdMod.name}.${fn.name}`;
+      if (prefix === '' || qualified.toLowerCase().includes(prefix) || fn.name.toLowerCase().includes(prefix)) {
+        add({
+          label: qualified,
+          kind: 'function',
+          detail: `${qualified}: ${fn.signature}`,
+          documentation: fn.description,
+          insertText: qualified,
+          filterText: `${fn.name} ${qualified}`
+        });
+      }
+    }
+  }
+
+  // G. Built-in constructors & constants
+  const constructors = [
+    { label: 'Some', detail: 'Some<a>(val: a): Option<a>', doc: 'Constructs an Option containing a value.' },
+    { label: 'None', detail: 'None: Option<a>', doc: 'Represents an empty Option value.' },
+    { label: 'Ok', detail: 'Ok<a, e>(val: a): Result<a, e>', doc: 'Constructs a success Result value.' },
+    { label: 'Err', detail: 'Err<a, e>(err: e): Result<a, e>', doc: 'Constructs an error Result value.' },
+    { label: 'Left', detail: 'Left<l, r>(left: l): Either<l, r>', doc: 'Constructs the Left variant of Either.' },
+    { label: 'Right', detail: 'Right<l, r>(right: r): Either<l, r>', doc: 'Constructs the Right variant of Either.' },
+    { label: 'Valid', detail: 'Valid<a>(val: a): Validation<a>', doc: 'Constructs a valid Validation value.' },
+    { label: 'Invalid', detail: 'Invalid<a>(errs: [string]): Validation<a>', doc: 'Constructs an invalid Validation error accumulator.' },
+    { label: 'true', detail: 'boolean (literal true)', doc: 'Boolean true constant value.' },
+    { label: 'false', detail: 'boolean (literal false)', doc: 'Boolean false constant value.' }
+  ];
+  for (const c of constructors) {
+    add({
+      label: c.label,
+      kind: c.label === 'true' || c.label === 'false' ? 'constant' : 'constructor',
+      detail: c.detail,
+      documentation: c.doc,
+      insertText: c.label
+    });
+  }
+
+  // H. Built-in types
+  const builtinTypes = [
+    'number', 'string', 'boolean', 'void', 'any', 'never', 'unknown',
+    'Option', 'Result', 'List', 'Array', 'Map', 'Set', 'Promise'
+  ];
+  for (const t of builtinTypes) {
+    add({
+      label: t,
+      kind: 'type',
+      detail: `type ${t}`,
+      documentation: `TypeLang type \`${t}\`.`,
+      insertText: t
+    });
+  }
+
+  // I. In-scope scoped symbols (function parameters, local variables, lambdas, patterns)
+  for (let i = checker.symbols.length - 1; i >= 0; i--) {
+    const s = checker.symbols[i];
+    if (s.name && !s.name.startsWith('__')) {
+      const isFun = s.type && (s.type.kind === 'fun' || (s.type.kind === 'poly' && s.type.type.kind === 'fun'));
+      add({
+        label: s.name,
+        kind: isFun ? 'function' : s.kind === 'constructor' ? 'constructor' : s.kind === 'gadt' ? 'type' : 'variable',
+        detail: s.type ? `${s.name}: ${typeToString(s.type)}` : s.name,
+        documentation: s.doc || `In-scope ${s.kind} \`${s.name}\``,
+        insertText: s.name
+      });
+    }
+  }
+
+  // F. Keywords & Language Snippets
+  const snippets: CompletionItem[] = [
+    {
+      label: 'import',
+      kind: 'snippet',
+      detail: 'import Module.{ members }',
+      insertText: 'import ${1:Module}.{ ${2:members} }',
+      isSnippet: true,
+      documentation: 'Import exported members from a module'
+    },
+    {
+      label: 'let',
+      kind: 'snippet',
+      detail: 'let name = value',
+      insertText: 'let ${1:name} = ${2:value};',
+      isSnippet: true,
+      documentation: 'Declare an immutable let variable binding'
+    },
+    {
+      label: 'let mut',
+      kind: 'snippet',
+      detail: 'let mut name = value',
+      insertText: 'let mut ${1:name} = ${2:value};',
+      isSnippet: true,
+      documentation: 'Declare a mutable variable binding'
+    },
+    {
+      label: 'function',
+      kind: 'snippet',
+      detail: 'function name(param: type): returnType',
+      insertText: 'function ${1:name}(${2:param}: ${3:number}): ${4:void} {\n  $0\n}',
+      isSnippet: true,
+      documentation: 'Define a function declaration'
+    },
+    {
+      label: 'type (GADT)',
+      kind: 'snippet',
+      detail: 'type GADT<a> = | Ctor(val: a): GADT<a>',
+      insertText: 'type ${1:Expr}<a> =\n  | ${2:Lit}(value: number): ${1:Expr}<number>\n  | ${3:Bool}(value: boolean): ${1:Expr}<boolean>',
+      isSnippet: true,
+      documentation: 'Declare a Generalized Algebraic Data Type (GADT)'
+    },
+    {
+      label: 'match',
+      kind: 'snippet',
+      detail: 'match (expr) { Pattern => result }',
+      insertText: 'match (${1:expr}) {\n  ${2:Pattern} => ${3:result}\n  ... => ${4:fallback}\n}',
+      isSnippet: true,
+      documentation: 'Exhaustive pattern match expression'
+    },
+    {
+      label: 'switch',
+      kind: 'snippet',
+      detail: 'switch (expr) { case val => result }',
+      insertText: 'switch (${1:expr}) {\n  case ${2:value} => ${3:result};\n  default => ${4:fallback};\n}',
+      isSnippet: true,
+      documentation: 'Multi-branch switch statement'
+    },
+    {
+      label: 'module',
+      kind: 'snippet',
+      detail: 'module Name { export ... }',
+      insertText: 'module ${1:ModuleName} {\n  export function ${2:doWork}(): ${3:void} {\n    $0\n  }\n}',
+      isSnippet: true,
+      documentation: 'Define a named module namespace with exports'
+    },
+    {
+      label: 'extern function',
+      kind: 'snippet',
+      detail: 'extern function name(param: type): returnType;',
+      insertText: 'extern function ${1:name}(${2:param}: ${3:string}): ${4:void};',
+      isSnippet: true,
+      documentation: 'Declare a foreign JavaScript function interface binding'
+    },
+    {
+      label: 'if',
+      kind: 'snippet',
+      detail: 'if (condition) { ... }',
+      insertText: 'if (${1:condition}) {\n  $0\n}',
+      isSnippet: true,
+      documentation: 'Conditional branch statement'
+    },
+    {
+      label: 'if else',
+      kind: 'snippet',
+      detail: 'if (condition) { ... } else { ... }',
+      insertText: 'if (${1:condition}) {\n  ${2:then}\n} else {\n  ${3:else}\n}',
+      isSnippet: true,
+      documentation: 'Conditional if-else branch statement'
+    },
+    {
+      label: 'for',
+      kind: 'snippet',
+      detail: 'for (let mut i = 0; i < len; i = i + 1) { ... }',
+      insertText: 'for (let mut ${1:i} = 0; ${1:i} < ${2:len}; ${1:i} = ${1:i} + 1) {\n  $0\n}',
+      isSnippet: true,
+      documentation: 'Standard iterative for-loop'
+    },
+    {
+      label: 'while',
+      kind: 'snippet',
+      detail: 'while (condition) { ... }',
+      insertText: 'while (${1:condition}) {\n  $0\n}',
+      isSnippet: true,
+      documentation: 'Conditional while-loop'
+    },
+    {
+      label: 'do',
+      kind: 'snippet',
+      detail: 'do(Monad) { x <- comp; pure res }',
+      insertText: 'do {\n  ${1:x} <- ${2:computation};\n  pure ${3:result};\n}',
+      isSnippet: true,
+      documentation: 'Monadic do-notation block with bind statements and pure return'
+    },
+    {
+      label: 'where',
+      kind: 'snippet',
+      detail: 'where { let helper = val }',
+      insertText: 'where {\n  let ${1:helper} = ${2:value};\n}',
+      isSnippet: true,
+      documentation: 'Scoped auxiliary bindings and helper functions'
+    },
+    {
+      label: 'pure',
+      kind: 'keyword',
+      detail: 'pure value',
+      insertText: 'pure ${1:value}',
+      isSnippet: true,
+      documentation: 'Lifts a pure value into the current monad'
+    },
+    {
+      label: 'return',
+      kind: 'keyword',
+      detail: 'return value;',
+      insertText: 'return ${1:value};',
+      isSnippet: true,
+      documentation: 'Returns a value from a function'
+    },
+    {
+      label: 'export',
+      kind: 'keyword',
+      detail: 'export declaration',
+      insertText: 'export ',
+      documentation: 'Exports a symbol from the current module'
+    }
+  ];
+
+  for (const snip of snippets) {
+    add(snip);
+  }
+
+  return results;
 }
