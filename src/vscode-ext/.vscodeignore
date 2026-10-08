@@ -1,0 +1,14 @@
+.vscode/**
+.vscode-test/**
+src/**
+node_modules/**
+../**
+../../**
+dist/**/*.d.ts
+dist/**/*.d.ts.map
+dist/**/*.js.map
+dist/extension.js
+dist/index.js
+tsconfig*.json
+*.vsix
+npm-debug.log*

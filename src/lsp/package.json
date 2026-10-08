@@ -1,0 +1,23 @@
+{
+  "name": "@typelang/lsp",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "TypeLang Language Server Protocol implementation",
+  "bin": {
+    "typelang-lsp": "./dist/server.js"
+  },
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@typelang/lang": "file:../lang",
+    "vscode-languageserver": "^9.0.0",
+    "vscode-languageserver-textdocument": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "^6.0.0"
+  }
+}

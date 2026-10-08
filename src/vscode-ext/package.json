@@ -1,0 +1,64 @@
+{
+  "name": "typelang-vscode-ext",
+  "publisher": "typelang",
+  "displayName": "TypeLang",
+  "description": "VS Code extension for the TypeLang programming language",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "typelang",
+    "language",
+    "compiler",
+    "llvm",
+    "gadt",
+    "type-checking"
+  ],
+  "activationEvents": [
+    "onLanguage:typelang"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "typelang",
+        "aliases": [
+          "TypeLang",
+          "typelang"
+        ],
+        "extensions": [
+          ".tl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "typelang",
+        "scopeName": "source.tl",
+        "path": "./syntaxes/typelang.tmLanguage.json"
+      }
+    ]
+  },
+  "main": "./dist/extension.cjs",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.cjs && esbuild ../lsp/src/server.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs",
+    "lint": "tsc --noEmit",
+    "package": "npm run build && vsce package --allow-missing-repository --skip-license"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^6.0.0"
+  }
+}
