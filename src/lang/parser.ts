@@ -190,24 +190,35 @@ export class Parser {
   }
 
   private parseExternStatement(): Statement {
+    const leadingDocComment = this.peek().docComment;
     const tok = this.consume('KEYWORD', 'extern');
 
     // Case 1: extern module ModuleName { ... } or extern "npm:pkg" as ModuleName { ... }
     if (this.check('KEYWORD', 'module') || this.check('STRING')) {
       let moduleName = '';
+      let moduleNameLoc: SourceLoc | undefined;
       if (this.match('KEYWORD', 'module')) {
         if (this.check('STRING')) {
-          moduleName = this.advance().value;
+          const strTok = this.advance();
+          moduleName = strTok.value;
+          moduleNameLoc = strTok.loc;
         } else {
+          const idTok = this.peek();
           moduleName = this.consumeIdentOrKeyword("Expected module name after extern module");
+          moduleNameLoc = idTok.loc;
         }
       } else if (this.check('STRING')) {
-        moduleName = this.advance().value;
+        const strTok = this.advance();
+        moduleName = strTok.value;
+        moduleNameLoc = strTok.loc;
       }
 
       let alias: string | undefined;
+      let aliasLoc: SourceLoc | undefined;
       if (this.match('KEYWORD', 'as')) {
+        const aliasTok = this.peek();
         alias = this.consumeIdentOrKeyword("Expected alias name after as");
+        aliasLoc = aliasTok.loc;
       }
 
       this.consume('SYMBOL', '{', "Expected '{' to start extern module body");
@@ -217,16 +228,17 @@ export class Parser {
       const values: SExternValue[] = [];
 
       while (!this.check('SYMBOL', '}') && !this.isAtEnd()) {
+        const itemDoc = this.peek().docComment;
         const itemExported = this.match('KEYWORD', 'export');
         if (this.check('KEYWORD', 'fn') || this.check('KEYWORD', 'function')) {
           this.advance();
-          functions.push(this.parseExternFunction(alias || moduleName, itemExported));
+          functions.push(this.parseExternFunction(alias || moduleName, itemExported, itemDoc));
         } else if (this.check('KEYWORD', 'type')) {
           this.advance();
-          types.push(this.parseExternType(itemExported));
+          types.push(this.parseExternType(itemExported, itemDoc));
         } else if (this.check('KEYWORD', 'let') || this.check('KEYWORD', 'var') || this.check('KEYWORD', 'const')) {
           this.advance();
-          values.push(this.parseExternValue(alias || moduleName, itemExported));
+          values.push(this.parseExternValue(alias || moduleName, itemExported, itemDoc));
         } else {
           this.advance();
         }
@@ -239,26 +251,27 @@ export class Parser {
         functions,
         types,
         values,
-        loc: tok.loc
+        docComment: leadingDocComment,
+        loc: aliasLoc || moduleNameLoc || tok.loc
       };
     }
 
     // Case 2: extern fn / extern function
     if (this.match('KEYWORD', 'fn') || this.match('KEYWORD', 'function')) {
-      const fn = this.parseExternFunction();
-      return { ...fn, loc: tok.loc };
+      const fn = this.parseExternFunction(undefined, undefined, leadingDocComment);
+      return { ...fn, loc: fn.loc || tok.loc };
     }
 
     // Case 3: extern type
     if (this.match('KEYWORD', 'type')) {
-      const t = this.parseExternType();
-      return { ...t, loc: tok.loc };
+      const t = this.parseExternType(undefined, leadingDocComment);
+      return { ...t, loc: t.loc || tok.loc };
     }
 
     // Case 4: extern let / const / var
     if (this.match('KEYWORD', 'let') || this.match('KEYWORD', 'const') || this.match('KEYWORD', 'var')) {
-      const v = this.parseExternValue();
-      return { ...v, loc: tok.loc };
+      const v = this.parseExternValue(undefined, undefined, leadingDocComment);
+      return { ...v, loc: v.loc || tok.loc };
     }
 
     throw new Error(`Unexpected token after 'extern' at line ${tok.loc.line}`);
@@ -368,19 +381,21 @@ export class Parser {
     return left;
   }
 
-  private parseExternFunction(moduleName?: string, isExported?: boolean): SExternFunction {
+  private parseExternFunction(moduleName?: string, isExported?: boolean, docComment?: string): SExternFunction {
+    const fnNameTok = this.peek();
     const fnName = this.consumeIdentOrKeyword("Expected function name in extern declaration");
     const typeParams = this.parseTypeParams();
 
     this.consume('SYMBOL', '(', "Expected '(' for extern function parameters");
-    const params: { name: string; type: TypeAST; isOptional?: boolean }[] = [];
+    const params: { name: string; type: TypeAST; isOptional?: boolean; loc?: SourceLoc }[] = [];
     if (!this.check('SYMBOL', ')')) {
       do {
+        const pTok = this.peek();
         const pName = this.consumeIdentOrKeyword("Expected parameter name");
         const isOptional = this.match('SYMBOL', '?');
         this.consume('SYMBOL', ':', "Expected ':' after parameter name");
         const pType = this.parseTypeAST();
-        params.push({ name: pName, type: pType, isOptional });
+        params.push({ name: pName, type: pType, isOptional, loc: pTok.loc });
       } while (this.match('SYMBOL', ','));
     }
     this.consume('SYMBOL', ')', "Expected ')' after parameters");
@@ -409,11 +424,14 @@ export class Parser {
       params,
       returnType,
       jsSymbol,
-      isExported
+      isExported,
+      docComment,
+      loc: fnNameTok.loc
     };
   }
 
-  private parseExternType(isExported?: boolean): SExternType {
+  private parseExternType(isExported?: boolean, docComment?: string): SExternType {
+    const typeNameTok = this.peek();
     const name = this.consumeIdentOrKeyword("Expected type name in extern type declaration");
     const typeParams = this.parseTypeParams();
 
@@ -426,11 +444,14 @@ export class Parser {
       name,
       typeParams,
       type,
-      isExported
+      isExported,
+      docComment,
+      loc: typeNameTok.loc
     };
   }
 
-  private parseExternValue(moduleName?: string, isExported?: boolean): SExternValue {
+  private parseExternValue(moduleName?: string, isExported?: boolean, docComment?: string): SExternValue {
+    const valNameTok = this.peek();
     const name = this.consumeIdentOrKeyword("Expected value name in extern declaration");
     this.consume('SYMBOL', ':', "Expected ':' after value name");
     const type = this.parseTypeAST();
@@ -452,7 +473,9 @@ export class Parser {
       moduleName,
       type,
       jsSymbol,
-      isExported
+      isExported,
+      docComment,
+      loc: valNameTok.loc
     };
   }
 

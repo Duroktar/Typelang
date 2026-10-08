@@ -704,11 +704,19 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
       .match(/([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:[A-Za-z_][A-Za-z0-9_]*)?$/)?.[1];
     if (qualifier) {
       const moduleEnv = env.modules.get(qualifier);
-      const memberType = moduleEnv?.vars.get(word);
-      if (moduleEnv && memberType) {
-        contents.push(`\`\`\`typelang\n${qualifier}.${word}: ${typeToString(memberType)}\n\`\`\``);
-        contents.push(moduleEnv.docs?.get(word) || moduleEnv.moduleDoc || `Member of the \`${qualifier}\` standard library module.`);
-        return { contents, word };
+      if (moduleEnv) {
+        const memberType = moduleEnv.vars.get(word);
+        if (memberType) {
+          contents.push(`\`\`\`typelang\n${qualifier}.${word}: ${typeToString(memberType)}\n\`\`\``);
+          contents.push(moduleEnv.docs?.get(word) || moduleEnv.moduleDoc || `Member of the \`${qualifier}\` module.`);
+          return { contents, word };
+        }
+        const memberAlias = moduleEnv.typeAliases.get(word);
+        if (memberAlias) {
+          contents.push(`\`\`\`typelang\ntype ${qualifier}.${word} = ${typeToString(memberAlias.type)}\n\`\`\``);
+          contents.push(moduleEnv.docs?.get(word) || `Type alias of the \`${qualifier}\` module.`);
+          return { contents, word };
+        }
       }
     }
 
@@ -734,11 +742,20 @@ export function getHoverInformation(code: string, line: number, col: number): Ho
         contents.push('*Loop iteration variable*');
       } else if (matchedSymbol.kind === 'variable') {
         const prefix = matchedSymbol.isMut ? 'let mut' : 'let';
+        const container = matchedSymbol.containerName ? ` of \`${matchedSymbol.containerName}\`` : '';
         contents.push('```typelang\n' + prefix + ' ' + word + ': ' + typeStr + '\n```');
-        contents.push(matchedSymbol.isExported ? '*Exported top-level variable*' : '*Local variable*');
+        contents.push(container ? `*Member variable${container}*` : (matchedSymbol.isExported ? '*Exported top-level variable*' : '*Local variable*'));
       } else if (matchedSymbol.kind === 'function') {
+        const container = matchedSymbol.containerName ? ` of \`${matchedSymbol.containerName}\`` : '';
         contents.push('```typelang\nfunction ' + word + ': ' + typeStr + '\n```');
-        contents.push(matchedSymbol.isExported ? '*Exported function*' : '*Function definition*');
+        contents.push(container ? `*Member function${container}*` : (matchedSymbol.isExported ? '*Exported function*' : '*Function definition*'));
+      } else if (matchedSymbol.kind === 'type_alias') {
+        const container = matchedSymbol.containerName ? ` in \`${matchedSymbol.containerName}\`` : '';
+        contents.push('```typelang\ntype ' + word + ' = ' + typeStr + '\n```');
+        contents.push(`*Type alias${container}*`);
+      } else if (matchedSymbol.kind === 'module') {
+        contents.push('```typelang\nmodule ' + word + '\n```');
+        contents.push('*Module definition*');
       } else if (matchedSymbol.kind === 'reference') {
         const isFun = matchedSymbol.type && (matchedSymbol.type.kind === 'fun' || (matchedSymbol.type.kind === 'poly' && matchedSymbol.type.type.kind === 'fun'));
         if (isFun) {

@@ -3634,8 +3634,25 @@ export class TypeChecker {
         }
         const params = stmt.params.map(p => ({
           name: p.name,
-          type: this.astToType(p.type, env, typeVarMap)
+          type: this.astToType(p.type, env, typeVarMap),
+          loc: p.loc
         }));
+        for (const p of params) {
+          this.registerSymbol({
+            name: p.name,
+            type: p.type,
+            kind: 'parameter',
+            containerName: stmt.name,
+            loc: p.loc || stmt.loc,
+            scopeRange: {
+              startLine: stmt.loc?.line || 1,
+              startCol: 1,
+              endLine: stmt.loc?.line || 1,
+              endCol: 999999
+            },
+            doc: `Parameter \`${p.name}\` of extern function \`${stmt.name}\``
+          });
+        }
         const returnType = this.astToType(stmt.returnType, env, typeVarMap);
         let fnType: Type = { kind: 'fun', params, returnType };
         if (quantifiers.length > 0) {
@@ -3646,10 +3663,10 @@ export class TypeChecker {
         this.registerSymbol({
           name: stmt.name,
           type: fnType,
-          kind: 'extern',
+          kind: 'function',
           isExported: stmt.isExported,
           loc: stmt.loc,
-          doc: `Extern function \`${stmt.name}\``
+          doc: stmt.docComment || `Extern function \`${stmt.name}\``
         });
         break;
       }
@@ -3669,10 +3686,10 @@ export class TypeChecker {
         this.registerSymbol({
           name: stmt.name,
           type: targetType,
-          kind: 'extern',
+          kind: 'type_alias',
           isExported: stmt.isExported,
           loc: stmt.loc,
-          doc: `Extern type \`${stmt.name}\``
+          doc: stmt.docComment || `Extern type \`${stmt.name}\``
         });
         break;
       }
@@ -3684,10 +3701,10 @@ export class TypeChecker {
         this.registerSymbol({
           name: stmt.name,
           type: valType,
-          kind: 'extern',
+          kind: 'variable',
           isExported: stmt.isExported,
           loc: stmt.loc,
-          doc: `Extern value \`${stmt.name}\``
+          doc: stmt.docComment || `Extern value \`${stmt.name}\``
         });
         break;
       }
@@ -3695,6 +3712,16 @@ export class TypeChecker {
       case 's_extern_module': {
         const modEnv = createScopedEnv(env);
         modEnv.exports = new Set();
+        if (stmt.docComment) modEnv.moduleDoc = stmt.docComment;
+
+        // Register the extern module symbol
+        this.registerSymbol({
+          name: stmt.name,
+          type: this.moduleEnvToType(modEnv),
+          kind: 'module',
+          loc: stmt.loc,
+          doc: stmt.docComment || `Extern module \`${stmt.name}\``
+        });
 
         for (const t of stmt.types) {
           const typeVarMap = new Map<string, Type>();
@@ -3708,12 +3735,34 @@ export class TypeChecker {
             type: targetType
           });
           modEnv.exports.add(t.name);
+          if (t.loc) modEnv.defLocs?.set(t.name, t.loc);
+          if (t.docComment) modEnv.docs?.set(t.name, t.docComment);
+
+          this.registerSymbol({
+            name: t.name,
+            type: targetType,
+            kind: 'type_alias',
+            containerName: stmt.name,
+            loc: t.loc,
+            doc: t.docComment || `Type alias \`${stmt.name}.${t.name}\``
+          });
         }
 
         for (const v of stmt.values) {
           const valType = this.astToType(v.type, modEnv);
           modEnv.vars.set(v.name, valType);
           modEnv.exports.add(v.name);
+          if (v.loc) modEnv.defLocs?.set(v.name, v.loc);
+          if (v.docComment) modEnv.docs?.set(v.name, v.docComment);
+
+          this.registerSymbol({
+            name: v.name,
+            type: valType,
+            kind: 'variable',
+            containerName: stmt.name,
+            loc: v.loc,
+            doc: v.docComment || `Extern variable \`${stmt.name}.${v.name}\``
+          });
         }
 
         for (const fn of stmt.functions) {
@@ -3729,8 +3778,27 @@ export class TypeChecker {
           }
           const params = fn.params.map(p => ({
             name: p.name,
-            type: this.astToType(p.type, modEnv, typeVarMap)
+            type: this.astToType(p.type, modEnv, typeVarMap),
+            loc: p.loc
           }));
+
+          for (const p of params) {
+            this.registerSymbol({
+              name: p.name,
+              type: p.type,
+              kind: 'parameter',
+              containerName: fn.name,
+              loc: p.loc || fn.loc,
+              scopeRange: {
+                startLine: fn.loc?.line || stmt.loc?.line || 1,
+                startCol: 1,
+                endLine: fn.loc?.line || stmt.loc?.line || 1,
+                endCol: 999999
+              },
+              doc: `Parameter \`${p.name}\` of function \`${stmt.name}.${fn.name}\``
+            });
+          }
+
           const returnType = this.astToType(fn.returnType, modEnv, typeVarMap);
           let fnType: Type = { kind: 'fun', params, returnType };
           if (quantifiers.length > 0) {
@@ -3738,14 +3806,28 @@ export class TypeChecker {
           }
           modEnv.vars.set(fn.name, fnType);
           modEnv.exports.add(fn.name);
+          if (fn.loc) modEnv.defLocs?.set(fn.name, fn.loc);
+          if (fn.docComment) modEnv.docs?.set(fn.name, fn.docComment);
+
+          this.registerSymbol({
+            name: fn.name,
+            type: fnType,
+            kind: 'function',
+            containerName: stmt.name,
+            loc: fn.loc,
+            doc: fn.docComment || `Extern function \`${stmt.name}.${fn.name}\``
+          });
         }
 
+        const modType = this.moduleEnvToType(modEnv);
         env.modules.set(stmt.name, modEnv);
-        env.vars.set(stmt.name, this.moduleEnvToType(modEnv));
+        env.vars.set(stmt.name, modType);
+        if (stmt.loc) env.defLocs?.set(stmt.name, stmt.loc);
         const cleanName = stmt.name.replace(/^npm:/, '').replace(/[^a-zA-Z0-9_]/g, '_');
         if (cleanName !== stmt.name) {
           env.modules.set(cleanName, modEnv);
-          env.vars.set(cleanName, this.moduleEnvToType(modEnv));
+          env.vars.set(cleanName, modType);
+          if (stmt.loc) env.defLocs?.set(cleanName, stmt.loc);
         }
         if (stmt.isExported) env.exports.add(stmt.name);
         break;

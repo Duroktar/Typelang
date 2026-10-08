@@ -528,10 +528,11 @@ export interface SExternFunction {
   name: string;
   moduleName?: string;
   typeParams: TypeParam[];
-  params: { name: string; type: TypeAST; isOptional?: boolean }[];
+  params: { name: string; type: TypeAST; isOptional?: boolean; loc?: SourceLoc }[];
   returnType: TypeAST;
   jsSymbol?: string;
   isExported?: boolean;
+  docComment?: string;
   loc?: SourceLoc;
 }
 
@@ -541,6 +542,7 @@ export interface SExternType {
   typeParams: TypeParam[];
   type: TypeAST;
   isExported?: boolean;
+  docComment?: string;
   loc?: SourceLoc;
 }
 
@@ -551,6 +553,7 @@ export interface SExternValue {
   type: TypeAST;
   jsSymbol?: string;
   isExported?: boolean;
+  docComment?: string;
   loc?: SourceLoc;
 }
 
@@ -561,6 +564,7 @@ export interface SExternModule {
   types: SExternType[];
   values: SExternValue[];
   isExported?: boolean;
+  docComment?: string;
   loc?: SourceLoc;
 }
 

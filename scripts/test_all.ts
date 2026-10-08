@@ -1,5 +1,6 @@
 import { runCompilerTestSuite } from '../src/lang/tests';
 import { runLLVMUnitTests } from '../src/lang/tests_llvm';
+import { runCodegenTestSuite } from '../src/lang/tests_codegen';
 import { EXAMPLES } from '../src/lang/examples';
 import { Lexer } from '../src/lang/lexer';
 import { Parser } from '../src/lang/parser';
@@ -27,6 +28,16 @@ if (llvmUnitRes.failed > 0) {
   process.exit(1);
 } else {
   console.log(`✅ All ${llvmUnitRes.passed} LLVM unit tests passed.`);
+}
+
+console.log("\nRunning Exhaustive Codegen Backend Test Suite (LLVM, C, C++)...");
+const codegenRes = runCodegenTestSuite();
+if (codegenRes.failed > 0) {
+  console.log(`❌ ${codegenRes.failed} codegen backend tests failed:`);
+  codegenRes.errors.forEach(err => console.log(`  - ${err}`));
+  process.exit(1);
+} else {
+  console.log(`✅ All ${codegenRes.passed} exhaustive codegen tests passed across LLVM, C, and C++ (${codegenRes.durationMs}ms).`);
 }
 
 console.log("\nRunning Example Type Checking...");

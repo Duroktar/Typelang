@@ -8,7 +8,10 @@ import {
   GADTDecl,
   SFunction,
   TypeAST,
-  ELambda
+  ELambda,
+  desugarDo,
+  EDo,
+  EWhere
 } from './ast';
 
 export interface LLVMValue {
@@ -446,6 +449,9 @@ export class LLVMIRGenerator {
         if (s.kind === 's_function') {
           const symbol = prefix ? `${prefix}_${s.name}` : s.name;
           allFunctions.push({ fn: s, prefix, symbol });
+          if (s.whereBindings) {
+            collectFunctions(s.whereBindings, prefix);
+          }
         } else if (s.kind === 's_module') {
           const modPrefix = prefix ? `${prefix}_${s.name}` : s.name;
           collectFunctions(s.body, modPrefix);
@@ -714,6 +720,15 @@ export class LLVMIRGenerator {
       this.emitAlloca(`${allocaReg} = alloca ${targetType}, align 8`);
       this.emit(`store ${targetType} %arg.${p.name}, ${targetType}* ${allocaReg}, align 8`);
       this.varAllocaMap.set(p.name, { type: targetType, reg: allocaReg });
+    }
+
+    // Lower whereBindings local statements if present
+    if (fn.whereBindings) {
+      for (const b of fn.whereBindings) {
+        if (b.kind !== 's_function') {
+          this.lowerTopLevelStatement(b);
+        }
+      }
     }
 
     // Lower function body
@@ -1626,6 +1641,31 @@ export class LLVMIRGenerator {
             });
           }
 
+          if (arm.pattern.kind === 'p_record' && isPtr) {
+            const recI8 = this.castToI8Ptr(scrutinee);
+            for (const f of (arm.pattern.fields || [])) {
+              const fName = f.alias ? f.alias : f.name;
+              const fieldSym = this.registerString(f.name);
+              const fieldByteLen = new TextEncoder().encode(f.name).length + 1;
+              const fieldReg = this.freshReg();
+              this.emit(`${fieldReg} = getelementptr inbounds [${fieldByteLen} x i8], [${fieldByteLen} x i8]* ${fieldSym}, i64 0, i64 0`);
+              const loadedVal = this.freshReg();
+              this.emit(`${loadedVal} = call i8* @_tl_record_get(i8* ${recI8}, i8* ${fieldReg})`);
+              const varAlloca = this.freshReg();
+              this.emitAlloca(`${varAlloca} = alloca i8*, align 8`);
+              this.emit(`store i8* ${loadedVal}, i8** ${varAlloca}, align 8`);
+              this.varAllocaMap.set(fName, { type: 'i8*', reg: varAlloca });
+            }
+          }
+
+          if (arm.guard) {
+            const guardVal = this.coerceToI1(this.lowerExpr(arm.guard));
+            const passBlock = this.freshBlock(`match.guard_pass${i}`);
+            const nextArmBlock = (i + 1 < expr.arms.length) ? armLabels[i + 1] : defaultArmLabel;
+            this.emitCondBranch(guardVal.name, passBlock, nextArmBlock);
+            this.startBlock(passBlock);
+          }
+
           const resVal = this.lowerExpr(arm.body);
           rawArmResults.push({ armIndex: i, blockName: this.currentBlock!.name, val: resVal });
         });
@@ -1712,6 +1752,33 @@ export class LLVMIRGenerator {
           this.emit(`store i8* ${valI8}, i8** ${valSlotCast}, align 8`);
         }
         return { type: 'i8*', name: ptr };
+      }
+
+      case 'e_record_update': {
+        const updatesLen = expr.updates.length;
+        const totalBytes = 8 + (updatesLen + 4) * 16;
+        const newPtr = this.freshReg();
+        this.emit(`${newPtr} = call i8* @malloc(i64 ${totalBytes})`);
+        for (let i = 0; i < updatesLen; i++) {
+          const u = expr.updates[i];
+          const keySym = this.registerString(u.name);
+          const keyByteLen = new TextEncoder().encode(u.name).length + 1;
+          const keyReg = this.freshReg();
+          this.emit(`${keyReg} = getelementptr inbounds [${keyByteLen} x i8], [${keyByteLen} x i8]* ${keySym}, i64 0, i64 0`);
+          const val = this.lowerExpr(u.value);
+          const valI8 = this.castToI8Ptr(val);
+          const keySlot = this.freshReg();
+          this.emit(`${keySlot} = getelementptr inbounds i8, i8* ${newPtr}, i64 ${8 + i * 16}`);
+          const keySlotCast = this.freshReg();
+          this.emit(`${keySlotCast} = bitcast i8* ${keySlot} to i8**`);
+          this.emit(`store i8* ${keyReg}, i8** ${keySlotCast}, align 8`);
+          const valSlot = this.freshReg();
+          this.emit(`${valSlot} = getelementptr inbounds i8, i8* ${newPtr}, i64 ${16 + i * 16}`);
+          const valSlotCast = this.freshReg();
+          this.emit(`${valSlotCast} = bitcast i8* ${valSlot} to i8**`);
+          this.emit(`store i8* ${valI8}, i8** ${valSlotCast}, align 8`);
+        }
+        return { type: 'i8*', name: newPtr };
       }
 
       case 'e_tuple': {
@@ -2173,6 +2240,21 @@ export class LLVMIRGenerator {
           return this.lowerExpr(retSub);
         }
         return { type: 'void', name: '' };
+      }
+
+      case 'e_do': {
+        const desugared = desugarDo(expr as EDo);
+        return this.lowerExpr(desugared);
+      }
+
+      case 'e_where': {
+        const whereExpr = expr as EWhere;
+        if (whereExpr.bindings) {
+          for (const b of whereExpr.bindings) {
+            this.lowerTopLevelStatement(b);
+          }
+        }
+        return this.lowerExpr(whereExpr.expr);
       }
 
       default:

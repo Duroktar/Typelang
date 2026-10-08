@@ -2517,6 +2517,101 @@ println(x)`,
       col: 1,
       contains: ['getElementById', 'requestAnimationFrame', 'setInterval']
     }
+  },
+  {
+    id: 'test_lsp_hover_extern_module_function',
+    name: 'LSP Hover: Extern Module Function (notify)',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies hover information for function declared inside an extern module.',
+    code: `extern module "ultimate-host" as Host {
+  function notify(message: string): void
+  type Handle = number
+  let version: string
+}
+println("ok")`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['ok'],
+    expectedHover: {
+      line: 2,
+      col: 14,
+      contains: ['notify', '(message: string) => void']
+    }
+  },
+  {
+    id: 'test_lsp_hover_extern_module_parameter',
+    name: 'LSP Hover: Extern Module Parameter (message)',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies hover information for parameter inside an extern function.',
+    code: `extern module "ultimate-host" as Host {
+  function notify(message: string): void
+  type Handle = number
+  let version: string
+}
+println("ok")`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['ok'],
+    expectedHover: {
+      line: 2,
+      col: 21,
+      contains: ['message', 'string']
+    }
+  },
+  {
+    id: 'test_lsp_hover_extern_module_type_alias',
+    name: 'LSP Hover: Extern Module Type Alias (Handle)',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies hover information for type alias inside an extern module.',
+    code: `extern module "ultimate-host" as Host {
+  function notify(message: string): void
+  type Handle = number
+  let version: string
+}
+println("ok")`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['ok'],
+    expectedHover: {
+      line: 3,
+      col: 9,
+      contains: ['Handle', 'number']
+    }
+  },
+  {
+    id: 'test_lsp_hover_extern_module_member_variable',
+    name: 'LSP Hover: Extern Module Member Variable (version)',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies hover information for variable inside an extern module.',
+    code: `extern module "ultimate-host" as Host {
+  function notify(message: string): void
+  type Handle = number
+  let version: string
+}
+println("ok")`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['ok'],
+    expectedHover: {
+      line: 4,
+      col: 9,
+      contains: ['version', 'string']
+    }
+  },
+  {
+    id: 'test_lsp_hover_extern_module_name',
+    name: 'LSP Hover: Extern Module Name (Host)',
+    category: 'LSP / Tooling Tests',
+    description: 'Verifies hover information for extern module name.',
+    code: `extern module "ultimate-host" as Host {
+  function notify(message: string): void
+  type Handle = number
+  let version: string
+}
+println("ok")`,
+    expectedTypeErrors: 0,
+    expectedStdoutSubstrings: ['ok'],
+    expectedHover: {
+      line: 1,
+      col: 35,
+      contains: ['Host', 'module']
+    }
   }
 ];
 

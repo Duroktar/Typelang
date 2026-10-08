@@ -1864,6 +1864,15 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
         if (stmt.expr?.kind === 'e_while') {
           return this.generateWhileLoopStatement(stmt.expr);
         }
+        if (!this.isCpp && stmt.expr?.kind === 'e_if') {
+          return this.generateIfStatement(stmt.expr as any);
+        }
+        if (!this.isCpp && stmt.expr?.kind === 'e_break') {
+          return `${this.indent()}break;`;
+        }
+        if (!this.isCpp && stmt.expr?.kind === 'e_continue') {
+          return `${this.indent()}continue;`;
+        }
         const exprStr = this.generateExpr(stmt.expr);
         return `${this.indent()}${exprStr};`;
       }
@@ -2397,6 +2406,41 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
     } else {
       return `${this.indent()}while (${condStr}) ${bodyCode}`;
     }
+  }
+
+  private generateIfStatement(expr: any): string {
+    const cond = `tl_is_truthy(${this.generateExpr(expr.cond)})`;
+    this.indentLevel++;
+    let thenCode = '';
+    if (expr.thenExpr && expr.thenExpr.kind === 'e_block') {
+      const stmts = (expr.thenExpr.statements || []).map((s: Statement) => this.generateStatement(s));
+      const res = expr.thenExpr.result ? `${this.indent()}${this.generateExpr(expr.thenExpr.result)};` : '';
+      thenCode = [...stmts, res].filter(Boolean).join('\n');
+    } else if (expr.thenExpr) {
+      thenCode = `${this.indent()}${this.generateExpr(expr.thenExpr)};`;
+    }
+    this.indentLevel--;
+
+    let elseCode = '';
+    if (expr.elseExpr) {
+      if (expr.elseExpr.kind === 'e_if') {
+        elseCode = ` else ${this.generateIfStatement(expr.elseExpr).trimStart()}`;
+      } else {
+        this.indentLevel++;
+        let innerElse = '';
+        if (expr.elseExpr.kind === 'e_block') {
+          const stmts = (expr.elseExpr.statements || []).map((s: Statement) => this.generateStatement(s));
+          const res = expr.elseExpr.result ? `${this.indent()}${this.generateExpr(expr.elseExpr.result)};` : '';
+          innerElse = [...stmts, res].filter(Boolean).join('\n');
+        } else {
+          innerElse = `${this.indent()}${this.generateExpr(expr.elseExpr)};`;
+        }
+        this.indentLevel--;
+        elseCode = ` else {\n${innerElse}\n${this.indent()}}`;
+      }
+    }
+
+    return `${this.indent()}if (${cond}) {\n${thenCode}\n${this.indent()}}${elseCode}`;
   }
 
   private generateMatchStatementBody(scrutinee: Expr, arms: MatchArm[]): string {
