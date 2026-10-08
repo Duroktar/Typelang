@@ -142,4 +142,104 @@ export class ProjectWorkspace {
         }
         return modEnv;
     }
+
+    public getFileAst(filePath: string): any {
+        return this.fileAstCache.get(filePath);
+    }
+
+    public invalidateFile(filePath: string): void {
+        this.moduleCache.delete(filePath);
+        this.fileAstCache.delete(filePath);
+        this.diagnostics = this.diagnostics.filter(d => (d as any).file !== filePath);
+    }
+
+    public clearCache(): void {
+        this.moduleCache.clear();
+        this.fileAstCache.clear();
+        this.diagnostics = [];
+    }
 }
+
+/**
+ * Host implementation for Node.js environments (CLI, Language Server, etc.)
+ * Safely wraps Node filesystem operations with in-memory overlay support.
+ */
+export class NodeSystemHost implements SystemHost {
+    private fs: any;
+    private path: any;
+    private fileOverlays = new Map<string, string>();
+
+    constructor(customFs?: any, customPath?: any) {
+        this.fs = customFs;
+        this.path = customPath;
+    }
+
+    private getFs(): any {
+        if (!this.fs && typeof require !== 'undefined') {
+            try { this.fs = require('fs'); } catch {}
+        }
+        return this.fs;
+    }
+
+    private getPath(): any {
+        if (!this.path && typeof require !== 'undefined') {
+            try { this.path = require('path'); } catch {}
+        }
+        return this.path;
+    }
+
+    public setOverlay(filePath: string, content: string): void {
+        this.fileOverlays.set(filePath, content);
+    }
+
+    public removeOverlay(filePath: string): void {
+        this.fileOverlays.delete(filePath);
+    }
+
+    public readFile(filePath: string): string | null {
+        if (this.fileOverlays.has(filePath)) {
+            return this.fileOverlays.get(filePath)!;
+        }
+        try {
+            const fsModule = this.getFs();
+            if (fsModule && fsModule.existsSync(filePath)) {
+                return fsModule.readFileSync(filePath, 'utf-8');
+            }
+        } catch {}
+        return null;
+    }
+
+    public fileExists(filePath: string): boolean {
+        if (this.fileOverlays.has(filePath)) {
+            return true;
+        }
+        try {
+            const fsModule = this.getFs();
+            if (fsModule) {
+                return fsModule.existsSync(filePath);
+            }
+        } catch {}
+        return false;
+    }
+
+    public resolvePath(basePath: string, relativePath: string): string {
+        try {
+            const pathModule = this.getPath();
+            if (pathModule) {
+                return pathModule.resolve(basePath, relativePath);
+            }
+        } catch {}
+        return relativePath;
+    }
+
+    public dirname(filePath: string): string {
+        try {
+            const pathModule = this.getPath();
+            if (pathModule) {
+                return pathModule.dirname(filePath);
+            }
+        } catch {}
+        return '.';
+    }
+}
+

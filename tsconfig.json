@@ -19,9 +19,19 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@typelang/lang": [
+        "./src/lang/index.ts"
+      ],
+      "@typelang/lang/*": [
+        "./src/lang/*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "src/lsp",
+    "src/vscode-ext"
+  ]
 }

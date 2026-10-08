@@ -7,40 +7,42 @@ import {
   ProposedFeatures,
   InitializeParams,
   DidChangeConfigurationParams,
-  CompletionItem,
+  CompletionItem as LSPCompletionItem,
   CompletionItemKind,
   TextDocumentPositionParams,
   Hover,
   MarkupKind,
+  Location,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
   Lexer,
   Parser,
   TypeChecker,
+  ProjectWorkspace,
+  NodeSystemHost,
   getHoverInformation,
-  getCompletionItems,
-  configureLSP,
+  getCompletionInformation,
+  getDefinitionLocation,
 } from '@typelang/lang';
-import type { HoverResult, CompletionItemData } from '@typelang/lang';
+import type {
+  CompletionItem as TLCompletionItem,
+  HoverResult,
+  DefinitionLocation,
+} from '@typelang/lang';
 
-import { ProjectWorkspace, NodeSystemHost } from '@typelang/lang';
-
-const workspace = new ProjectWorkspace(new NodeSystemHost());
+// Initialize Node host & multi-file workspace for TypeLang
+const systemHost = new NodeSystemHost();
+const workspace = new ProjectWorkspace(systemHost);
 
 // Create a connection for the server using Node IPC
 const connection = createConnection(ProposedFeatures.all);
 
-// Create a simple text document manager
+// Create a text document manager
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
-
-// Configure LSP with docs URL from environment
-const docsBaseUrl = process.env.TYPELANG_DOCS_URL || 'http://localhost:3000/docs';
-configureLSP({ docsBaseUrl });
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
-let hasDiagnosticRelatedInformationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
   const capabilities = params.capabilities;
@@ -51,19 +53,15 @@ connection.onInitialize((params: InitializeParams) => {
   hasWorkspaceFolderCapability = !!(
     capabilities.workspace && !!capabilities.workspace.workspaceFolders
   );
-  hasDiagnosticRelatedInformationCapability = !!(
-    capabilities.textDocument &&
-    capabilities.textDocument.publishDiagnostics &&
-    capabilities.textDocument.publishDiagnostics.relatedInformation
-  );
 
   return {
     capabilities: {
       textDocumentSync: 1, // Full sync
       hoverProvider: true,
+      definitionProvider: true,
       completionProvider: {
         resolveProvider: false,
-        triggerCharacters: ['.'],
+        triggerCharacters: ['.', '{', ':', '<', '"'],
       },
     },
   };
@@ -78,7 +76,7 @@ connection.onInitialized(() => {
   }
 });
 
-connection.onDidChangeConfiguration((change: DidChangeConfigurationParams) => {
+connection.onDidChangeConfiguration((_change: DidChangeConfigurationParams) => {
   // Re-validate all open text documents
   documents.all().forEach(validateTextDocument);
 });
@@ -88,36 +86,99 @@ documents.onDidChangeContent((change) => {
   validateTextDocument(change.document);
 });
 
+// Clean up cached files and overlays when documents close
+documents.onDidClose((event) => {
+  const filePath = uriToFilePath(event.document.uri);
+  systemHost.removeOverlay(filePath);
+  workspace.invalidateFile(filePath);
+  connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
+});
+
+/**
+ * Normalizes document URI to a file path
+ */
+function uriToFilePath(uri: string): string {
+  if (uri.startsWith('file://')) {
+    try {
+      return decodeURIComponent(uri.slice('file://'.length));
+    } catch {
+      return uri.slice('file://'.length);
+    }
+  }
+  return uri;
+}
+
+/**
+ * Validates TypeLang document and publishes diagnostics
+ */
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
   const text = textDocument.getText();
+  const filePath = uriToFilePath(textDocument.uri);
   const diagnostics: Diagnostic[] = [];
 
   try {
-    // Lex and parse
-    // const lexer = new Lexer(text);
-    // const tokens = lexer.tokenize();
-    // const parser = new Parser(tokens);
-    // const ast = parser.parseProgram();
+    // Keep in-memory workspace buffer up-to-date with unsaved changes
+    systemHost.setOverlay(filePath, text);
+    workspace.invalidateFile(filePath);
 
-    // // Type check
-    // const checker = new TypeChecker();
-    // checker.checkProgram(ast);
+    // Multi-file workspace checking
+    workspace.checkFile(filePath);
 
-    const filetargetraw = textDocument.uri
-    console.log('filetargetraw:', filetargetraw)
-    const filetarget = filetargetraw.substring('file://'.length)
-    console.log('filetarget:', filetarget)
-    workspace.checkFile(filetarget);
+    // Collect diagnostics from workspace for this file
+    const fileDiags = workspace.diagnostics.filter(
+      (d: any) => !d.file || d.file === filePath
+    );
 
-    console.log(workspace)
-    // Collect diagnostics from checker
-    if (workspace.diagnostics && workspace.diagnostics.length > 0) {
-      for (const diag of workspace.diagnostics) {
+    if (fileDiags.length > 0) {
+      for (const diag of fileDiags) {
         diagnostics.push({
-          severity: diag.severity === 'error' ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
+          severity:
+            diag.severity === 'warning'
+              ? DiagnosticSeverity.Warning
+              : diag.severity === 'info'
+              ? DiagnosticSeverity.Information
+              : DiagnosticSeverity.Error,
           range: {
-            start: { line: diag.line - 1, character: diag.col - 1 },
-            end: { line: (diag.endLine || diag.line) - 1, character: (diag.endCol || diag.col + 1) - 1 },
+            start: {
+              line: Math.max(0, diag.line - 1),
+              character: Math.max(0, diag.col - 1),
+            },
+            end: {
+              line: Math.max(0, (diag.endLine || diag.line) - 1),
+              character: Math.max(0, (diag.endCol || diag.col + 1) - 1),
+            },
+          },
+          message: diag.message,
+          source: 'typelang',
+        });
+      }
+    } else {
+      // Validate standalone file syntax and semantics
+      const lexer = new Lexer(text);
+      const tokens = lexer.tokenize();
+      const parser = new Parser(tokens);
+      const ast = parser.parseProgram();
+
+      const checker = new TypeChecker();
+      checker.checkProgram(ast);
+
+      for (const diag of checker.diagnostics) {
+        diagnostics.push({
+          severity:
+            diag.severity === 'warning'
+              ? DiagnosticSeverity.Warning
+              : diag.severity === 'info'
+              ? DiagnosticSeverity.Information
+              : DiagnosticSeverity.Error,
+          range: {
+            start: {
+              line: Math.max(0, diag.line - 1),
+              character: Math.max(0, diag.col - 1),
+            },
+            end: {
+              line: Math.max(0, (diag.endLine || diag.line) - 1),
+              character: Math.max(0, (diag.endCol || diag.col + 1) - 1),
+            },
           },
           message: diag.message,
           source: 'typelang',
@@ -125,22 +186,30 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
       }
     }
   } catch (err: any) {
-    // Handle parse errors
-    if (err.loc) {
+    if (err && err.loc) {
       diagnostics.push({
         severity: DiagnosticSeverity.Error,
         range: {
-          start: { line: err.loc.line - 1, character: err.loc.col - 1 },
-          end: { line: err.loc.line - 1, character: err.loc.col },
+          start: {
+            line: Math.max(0, err.loc.line - 1),
+            character: Math.max(0, err.loc.col - 1),
+          },
+          end: {
+            line: Math.max(0, (err.loc.endLine || err.loc.line) - 1),
+            character: Math.max(0, (err.loc.endCol || err.loc.col + 1) - 1),
+          },
         },
-        message: err.message || 'Parse error',
+        message: err.message || 'Syntax error',
         source: 'typelang',
       });
     } else {
       diagnostics.push({
         severity: DiagnosticSeverity.Error,
-        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
-        message: err.message || 'Unknown error',
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+        message: err?.message || 'Unexpected compiler error',
         source: 'typelang',
       });
     }
@@ -159,88 +228,135 @@ connection.onHover((params: TextDocumentPositionParams): Hover | null => {
   const col = params.position.character + 1;
 
   try {
-    const target = params.textDocument.uri.slice('file://'.length);
-    console.log('onHover: target:', target)
-    const env = workspace.checkFile(target);
-    console.log('symbolCache', workspace.symbolCache);
-    console.log('workspace', workspace);
-    const symbols = workspace.symbolCache.get(target) || [];
-    const program = workspace.fileAstCache.get(target);
-    const info = getHoverInformation(program!, env!, symbols, text, line, col);
-    if (!info) return null;
+    const info: HoverResult | null = getHoverInformation(text, line, col);
+    if (!info || !info.contents || info.contents.length === 0) return null;
 
-    // Convert HoverResult to LSP Hover with proper markdown formatting
+    // Deduplicate and filter empty content strings
+    const seen = new Set<string>();
+    const uniqueContents: string[] = [];
+    for (const item of info.contents) {
+      const trimmed = (item || '').trim();
+      if (trimmed && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        uniqueContents.push(trimmed);
+      }
+    }
+
+    if (uniqueContents.length === 0) return null;
+
     return {
       contents: {
         kind: MarkupKind.Markdown,
-        value: info.contents.join('\n\n'),
+        value: uniqueContents.join('\n\n'),
       },
     };
-  } catch (err: any) {
+  } catch {
     return null;
   }
 });
 
-// Completion support
-connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
-  const document = documents.get(params.textDocument.uri);
-  if (!document) return [];
+// Go-to-Definition support
+connection.onDefinition(
+  (params: TextDocumentPositionParams): Location | null => {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) return null;
 
-  const text = document.getText();
-  const line = params.position.line + 1;
-  const col = params.position.character + 1;
+    const text = document.getText();
+    const line = params.position.line + 1;
+    const col = params.position.character + 1;
 
-  try {
-    const items = getCompletionItems(text, line, col);
-    return items.map((item: CompletionItemData) => ({
-      label: item.label,
-      kind: mapCompletionKind(item.kind),
-      detail: item.detail,
-      documentation: item.documentation,
-      insertText: item.insertText || item.label,
-      sortText: item.sortText || item.label,
-    }));
-  } catch (err) {
-    // Return a whimsical cat with helpful message when code is incomplete
-    return [
-      {
-        label: '🐱 Code needs some TLC...',
-        kind: CompletionItemKind.Text,
-        detail: 'Incomplete syntax detected',
-        documentation: `
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃  ∧_∧                          ┃
-┃ ( ･ω･)  Looks like something  ┃
-┃ ⊃✏️ ⊂  is missing or broken!  ┃
-┃                               ┃
-┃  Don't worry, fix the syntax  ┃
-┃  and your completions will    ┃
-┃  purr back to life! 💜         ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-`,
-        insertText: '',
-        sortText: 'zzz_incomplete',
-      },
-    ];
+    try {
+      const defLoc: DefinitionLocation | null = getDefinitionLocation(
+        text,
+        line,
+        col
+      );
+      if (!defLoc) return null;
+
+      return {
+        uri: params.textDocument.uri,
+        range: {
+          start: {
+            line: Math.max(0, defLoc.line - 1),
+            character: Math.max(0, defLoc.col - 1),
+          },
+          end: {
+            line: Math.max(0, (defLoc.endLine || defLoc.line) - 1),
+            character: Math.max(0, (defLoc.endCol || defLoc.col) - 1),
+          },
+        },
+      };
+    } catch {
+      return null;
+    }
   }
-});
+);
+
+// Autocompletion support
+connection.onCompletion(
+  (params: TextDocumentPositionParams): LSPCompletionItem[] => {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) return [];
+
+    const text = document.getText();
+    const line = params.position.line + 1;
+    const col = params.position.character + 1;
+
+    try {
+      const items: TLCompletionItem[] = getCompletionInformation(
+        text,
+        line,
+        col
+      );
+      if (items && items.length > 0) {
+        return items.map((item) => ({
+          label: item.label,
+          kind: mapCompletionKind(item.kind),
+          detail: item.detail,
+          documentation: item.documentation,
+          insertText: item.insertText || item.label,
+          sortText: item.sortText,
+          filterText: item.filterText,
+        }));
+      }
+    } catch {
+      // Incomplete syntax fallback
+    }
+
+    return [];
+  }
+);
 
 /**
- * Map completion item kind from our domain model to LSP CompletionItemKind
+ * Map TypeLang completion item kinds to LSP CompletionItemKind
  */
 function mapCompletionKind(
-  kind: 'Keyword' | 'Function' | 'Variable' | 'Type' | 'Module' | 'Constructor' | 'Snippet'
+  kind?: string
 ): CompletionItemKind {
-  const kindMap: Record<string, CompletionItemKind> = {
-    'Keyword': CompletionItemKind.Keyword,
-    'Function': CompletionItemKind.Function,
-    'Variable': CompletionItemKind.Variable,
-    'Type': CompletionItemKind.Class,
-    'Module': CompletionItemKind.Module,
-    'Constructor': CompletionItemKind.Constructor,
-    'Snippet': CompletionItemKind.Snippet,
-  };
-  return kindMap[kind] || CompletionItemKind.Text;
+  switch (kind) {
+    case 'function':
+      return CompletionItemKind.Function;
+    case 'method':
+      return CompletionItemKind.Method;
+    case 'variable':
+      return CompletionItemKind.Variable;
+    case 'type':
+      return CompletionItemKind.Class;
+    case 'module':
+      return CompletionItemKind.Module;
+    case 'constructor':
+      return CompletionItemKind.Constructor;
+    case 'snippet':
+      return CompletionItemKind.Snippet;
+    case 'keyword':
+      return CompletionItemKind.Keyword;
+    case 'property':
+      return CompletionItemKind.Property;
+    case 'constant':
+      return CompletionItemKind.Constant;
+    default:
+      return CompletionItemKind.Text;
+  }
 }
 
 // Text document management
