@@ -1,0 +1,58 @@
+=== TYPELANG COMPREHENSIVE COMPILER VALIDATION SUITE ===
+[TEST 1: PRIMITIVES & ARITHMETIC]
+int: 42
+float: 3.14159
+neg: -15
+arith_add: 50
+arith_sub: 30
+arith_mul: 84
+arith_div: 42
+arith_mod: 2
+precedence: 15
+[TEST 2: BOOLEANS & LOGIC]
+true_val: true
+false_val: false
+op_and: false
+op_or: true
+op_not: true
+cmp_eq: true
+cmp_ne: false
+cmp_lt: true
+cmp_le: true
+cmp_gt: true
+cmp_ge: true
+[TEST 3: STRINGS & CONCATENATION]
+greeting: Hello, TypeLang!
+[TEST 4: VARIABLES & MUTABILITY]
+mut_acc: 20
+block_result: 56
+[TEST 5: FUNCTIONS & RECURSION]
+addTwo(18, 24): 42
+factorial(6): 720
+fibonacci(8): 21
+isEven(10): true
+isOdd(10): false
+[TEST 6: FIRST-CLASS FUNCTIONS]
+lambda_square(9): 81
+apply_higher_order: 144
+[TEST 7: CONTROL FLOW]
+ternary: above_40
+while_sum: 15
+break_continue_sum: 18
+switch_result: Third
+[TEST 8: MODULES & NAMESPACES]
+module_cube(4): 64
+nested_area(5, 7): 35
+[TEST 9: WHERE CLAUSES]
+where_result(25): 150
+[TEST 10: MATH LIBRARY]
+sqrt(64): 8
+floor(9.87): 9
+abs(-42.5): 42.5
+[TEST 11: ADTS & PATTERN MATCHING]
+color_red: 1
+color_green: 2
+color_blue: 3
+maybe_some: 88
+maybe_none: 99
+=== ALL VALIDATION TESTS COMPLETED SUCCESSFULLY ===

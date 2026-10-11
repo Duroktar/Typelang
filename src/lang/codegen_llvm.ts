@@ -56,6 +56,7 @@ export class LLVMIRGenerator {
   private currentModulePrefix: string = '';
   private globalVariables: Map<string, { symbol: string; type: string }> = new Map();
   private globalVarDecls: string[] = [];
+  private loopStack: { condBlock: string; mergeBlock: string }[] = [];
 
   private freshReg(): string {
     return `%t${++this.tempRegCounter}`;
@@ -325,19 +326,23 @@ export class LLVMIRGenerator {
     this.emit(`${dest} = call i8* @malloc(i64 64)`);
     if (val.type === 'double') {
       const p = this.freshReg();
-      this.emit(`${p} = call i32 (i8*, i8*, ...) @sprintf(i8* ${dest}, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt_num, i64 0, i64 0), double ${val.name})`);
+      this.emit(`${p} = call i32 (i8*, i8*, ...) @sprintf(i8* ${dest}, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.fmt_tostr_num, i64 0, i64 0), double ${val.name})`);
     } else if (val.type === 'i64' || val.type === 'i32') {
       const p = this.freshReg();
-      this.emit(`${p} = call i32 (i8*, i8*, ...) @sprintf(i8* ${dest}, i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.fmt_int, i64 0, i64 0), ${val.type} ${val.name})`);
+      this.emit(`${p} = call i32 (i8*, i8*, ...) @sprintf(i8* ${dest}, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.fmt_tostr_int, i64 0, i64 0), ${val.type} ${val.name})`);
     } else if (val.type === 'i1') {
+      const tPtr = this.freshReg();
+      this.emit(`${tPtr} = getelementptr inbounds [5 x i8], [5 x i8]* @.fmt_bool_t_val, i64 0, i64 0`);
+      const fPtr = this.freshReg();
+      this.emit(`${fPtr} = getelementptr inbounds [6 x i8], [6 x i8]* @.fmt_bool_f_val, i64 0, i64 0`);
       const condReg = this.freshReg();
-      this.emit(`${condReg} = select i1 ${val.name}, i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.fmt_bool_t, i64 0, i64 0), i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.fmt_bool_f, i64 0, i64 0)`);
+      this.emit(`${condReg} = select i1 ${val.name}, i8* ${tPtr}, i8* ${fPtr}`);
       const p = this.freshReg();
       this.emit(`${p} = call i8* @strcpy(i8* ${dest}, i8* ${condReg})`);
     } else {
       const ptr = this.castToI8Ptr(val);
       const p = this.freshReg();
-      this.emit(`${p} = call i32 (i8*, i8*, ...) @sprintf(i8* ${dest}, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt_str, i64 0, i64 0), i8* ${ptr})`);
+      this.emit(`${p} = call i32 (i8*, i8*, ...) @sprintf(i8* ${dest}, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_tostr_str, i64 0, i64 0), i8* ${ptr})`);
     }
     return dest;
   }
@@ -510,7 +515,12 @@ export class LLVMIRGenerator {
       '@.fmt_num = private unnamed_addr constant [4 x i8] c"%f\\0A\\00", align 1',
       '@.fmt_int = private unnamed_addr constant [6 x i8] c"%lld\\0A\\00", align 1',
       '@.fmt_bool_t = private unnamed_addr constant [6 x i8] c"true\\0A\\00", align 1',
-      '@.fmt_bool_f = private unnamed_addr constant [7 x i8] c"false\\0A\\00", align 1'
+      '@.fmt_bool_f = private unnamed_addr constant [7 x i8] c"false\\0A\\00", align 1',
+      '@.fmt_tostr_str = private unnamed_addr constant [3 x i8] c"%s\\00", align 1',
+      '@.fmt_tostr_num = private unnamed_addr constant [5 x i8] c"%.14g\\00", align 1',
+      '@.fmt_tostr_int = private unnamed_addr constant [5 x i8] c"%lld\\00", align 1',
+      '@.fmt_bool_t_val = private unnamed_addr constant [5 x i8] c"true\\00", align 1',
+      '@.fmt_bool_f_val = private unnamed_addr constant [6 x i8] c"false\\00", align 1'
     ];
 
     if (this.stringDecls.length > 0) {
@@ -2191,7 +2201,10 @@ export class LLVMIRGenerator {
 
         const condBlock = this.freshBlock('for.cond');
         const bodyBlock = this.freshBlock('for.body');
+        const stepBlock = loopStep ? this.freshBlock('for.step') : condBlock;
         const mergeBlock = this.freshBlock('for.merge');
+
+        this.loopStack.push({ condBlock: stepBlock, mergeBlock });
 
         this.emitBranch(condBlock);
         this.startBlock(condBlock);
@@ -2207,12 +2220,16 @@ export class LLVMIRGenerator {
         this.lowerExpr(body);
 
         if (loopStep) {
+          this.emitBranch(stepBlock);
+          this.startBlock(stepBlock);
           this.lowerExpr(loopStep);
         }
 
         this.emitBranch(condBlock);
-        this.startBlock(mergeBlock);
 
+        this.loopStack.pop();
+
+        this.startBlock(mergeBlock);
         return { type: 'void', name: '' };
       }
 
@@ -2220,6 +2237,8 @@ export class LLVMIRGenerator {
         const condBlock = this.freshBlock('while.cond');
         const bodyBlock = this.freshBlock('while.body');
         const mergeBlock = this.freshBlock('while.merge');
+
+        this.loopStack.push({ condBlock, mergeBlock });
 
         this.emitBranch(condBlock);
         this.startBlock(condBlock);
@@ -2230,7 +2249,29 @@ export class LLVMIRGenerator {
         this.lowerExpr(expr.body);
         this.emitBranch(condBlock);
 
+        this.loopStack.pop();
+
         this.startBlock(mergeBlock);
+        return { type: 'void', name: '' };
+      }
+
+      case 'e_break': {
+        const currentLoop = this.loopStack[this.loopStack.length - 1];
+        if (currentLoop) {
+          this.emitBranch(currentLoop.mergeBlock);
+          const deadBlock = this.freshBlock('dead.break');
+          this.startBlock(deadBlock);
+        }
+        return { type: 'void', name: '' };
+      }
+
+      case 'e_continue': {
+        const currentLoop = this.loopStack[this.loopStack.length - 1];
+        if (currentLoop) {
+          this.emitBranch(currentLoop.condBlock);
+          const deadBlock = this.freshBlock('dead.continue');
+          this.startBlock(deadBlock);
+        }
         return { type: 'void', name: '' };
       }
 

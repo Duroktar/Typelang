@@ -25,6 +25,7 @@ type Action =
   | DrawStockAction: Action
   | ClickZoneAction(zone: string, index: number): Action
   | DealAction: Action
+  | SetDrawModeAction(mode: number): Action
 
 // ==========================================
 // 2. Application State
@@ -47,7 +48,10 @@ let state = {
   mut selectedSource: "",
   mut selectedIndex: -1,
   mut moves: 0,
-  mut score: 0
+  mut score: 0,
+  mut drawMode: 3,
+  mut wasteVisibleCount: 0,
+  mut isWon: false
 }
 
 // ==========================================
@@ -140,6 +144,35 @@ function setCol(id: string, col: Card[]) {
   }
 }
 
+function checkWin() {
+  if (state.f0.length == 13 && state.f1.length == 13 && state.f2.length == 13 && state.f3.length == 13) {
+    state.isWon = true
+  }
+}
+
+function tryAutoMoveFoundation(sourceZone: string, cardIdx: number) {
+  let sourceCol = getCol(sourceZone)
+  if (sourceCol.length > 0) {
+    if (cardIdx == sourceCol.length - 1) {
+      let topCard = sourceCol[cardIdx]
+      let foundations = ["f0", "f1", "f2", "f3"]
+      let mut targetFound = ""
+      for (let mut f = 0; f < 4; f = f + 1) {
+        if (targetFound == "") {
+          let fCol = getCol(foundations[f])
+          if (canStackFoundation(fCol, topCard)) {
+            targetFound = foundations[f]
+          }
+        }
+      }
+
+      if (targetFound != "") {
+        tryMove(targetFound)
+      }
+    }
+  }
+}
+
 function dealGame() {
   let suits = [Hearts, Diamonds, Clubs, Spades]
   let mut deck = []
@@ -183,10 +216,12 @@ function dealGame() {
     state.stock.push(deck[i])
   }
 
+  state.wasteVisibleCount = 0
   state.selectedSource = ""
   state.selectedIndex = -1
   state.moves = 0
   state.score = 0
+  state.isWon = false
 }
 
 function tryMove(dest: string) {
@@ -194,8 +229,18 @@ function tryMove(dest: string) {
   
   let sourceCol = getCol(state.selectedSource)
   if (sourceCol.length == 0) { return }
+  if (state.selectedIndex < 0 || state.selectedIndex >= sourceCol.length) { return }
   let topCard = sourceCol[state.selectedIndex]
   let destCol = getCol(dest)
+
+  // From waste or foundation, only the top card can be moved
+  if (state.selectedSource == "waste" || state.selectedSource == "f0" || state.selectedSource == "f1" || state.selectedSource == "f2" || state.selectedSource == "f3") {
+    if (state.selectedIndex != sourceCol.length - 1) {
+      state.selectedSource = ""
+      state.selectedIndex = -1
+      return
+    }
+  }
 
   let mut isValid = false
   switch (dest) {
@@ -255,6 +300,19 @@ function tryMove(dest: string) {
 
     setCol(state.selectedSource, newSource)
     setCol(dest, destCol)
+
+    // Update waste visibility and score if moving from waste
+    if (state.selectedSource == "waste") {
+      if (newSource.length == 0) {
+        state.wasteVisibleCount = 0
+      } else if (state.wasteVisibleCount > 1) {
+        state.wasteVisibleCount = state.wasteVisibleCount - 1
+      } else {
+        state.wasteVisibleCount = 1
+      }
+      state.score = state.score + 5
+    }
+
     state.selectedSource = ""
     state.selectedIndex = -1
     state.moves = state.moves + 1
@@ -263,6 +321,8 @@ function tryMove(dest: string) {
       case "f0", "f1", "f2", "f3":
         state.score = state.score + 10
     }
+
+    checkWin()
   } else {
     // Invalid move
     state.selectedSource = ""
@@ -277,16 +337,37 @@ function tryMove(dest: string) {
 function dispatch(action: Action) {
   match (action) {
     DealAction => { dealGame() }
+    SetDrawModeAction(mode) => {
+      state.drawMode = mode
+      if (state.waste.length > 0) {
+        if (mode == 1) {
+          state.wasteVisibleCount = 1
+        } else {
+          let mut vis = 3
+          if (state.waste.length < vis) {
+            vis = state.waste.length
+          }
+          state.wasteVisibleCount = vis
+        }
+      }
+    }
     DrawStockAction => {
       if (state.stock.length > 0) {
-        let c = state.stock.pop()
-        match (c) {
-          Card(r, s, f) => {
-            state.waste.push(Card(r, s, true))
+        let mut countToDraw = state.drawMode
+        if (state.stock.length < countToDraw) {
+          countToDraw = state.stock.length
+        }
+        for (let mut i = 0; i < countToDraw; i = i + 1) {
+          let c = state.stock.pop()
+          match (c) {
+            Card(r, s, f) => {
+              state.waste.push(Card(r, s, true))
+            }
           }
         }
+        state.wasteVisibleCount = countToDraw
         state.moves = state.moves + 1
-      } else {
+      } else if (state.waste.length > 0) {
         let mut newStock = []
         for (let mut i = state.waste.length - 1; i >= 0; i = i - 1) {
           let c = state.waste[i]
@@ -298,6 +379,7 @@ function dispatch(action: Action) {
         }
         state.stock = newStock
         state.waste = []
+        state.wasteVisibleCount = 0
         state.moves = state.moves + 1
       }
       state.selectedSource = ""
@@ -306,6 +388,7 @@ function dispatch(action: Action) {
     ClickZoneAction(zone, index) => {
       if (state.selectedSource != "") {
         if (state.selectedSource == zone && state.selectedIndex == index) {
+          tryAutoMoveFoundation(zone, index)
           state.selectedSource = ""
           state.selectedIndex = -1
         } else {
@@ -318,8 +401,15 @@ function dispatch(action: Action) {
            match (c) {
              Card(r, s, f) => {
                if (f) {
-                 state.selectedSource = zone
-                 state.selectedIndex = index
+                 if (zone == "waste") {
+                   if (index == col.length - 1) {
+                     state.selectedSource = zone
+                     state.selectedIndex = index
+                   }
+                 } else {
+                   state.selectedSource = zone
+                   state.selectedIndex = index
+                 }
                }
              }
            }
@@ -410,20 +500,61 @@ function renderEmptySlot(onClickHandler: any) {
 }
 
 function renderTopRow() {
-  let stockEl = state.stock.length > 0
-    ? h("div", { className: "relative cursor-pointer transition hover:-translate-y-1", onClick: fn() { dispatch(DrawStockAction) } }, [
-        renderCardUI(state.stock[0], false, false, fn() { dispatch(DrawStockAction) })
+  let stockLen = state.stock.length
+  let stockEl = stockLen > 0
+    ? h("div", {
+        className: "relative cursor-pointer transition hover:-translate-y-1 select-none",
+        onClick: fn() { dispatch(DrawStockAction) }
+      }, [
+        renderCardUI(state.stock[state.stock.length - 1], false, false, fn() {}),
+        h("div", {
+          className: "absolute -bottom-1 -right-1 bg-amber-500 text-slate-950 text-[9px] sm:text-xs font-mono font-black px-1.5 py-0.5 rounded-full shadow border border-slate-900 pointer-events-none"
+        }, to_string(stockLen))
       ])
-    : h("div", { className: "cursor-pointer opacity-50", onClick: fn() { dispatch(DrawStockAction) } }, [
-        renderEmptySlot(fn() { dispatch(DrawStockAction) })
-      ])
+    : (state.waste.length > 0
+        ? h("div", {
+            className: "w-10 h-14 sm:w-14 sm:h-20 md:w-20 md:h-28 rounded-md sm:rounded-lg border-2 border-dashed border-amber-400/80 bg-emerald-950/40 flex flex-col items-center justify-center cursor-pointer hover:border-amber-300 hover:bg-emerald-900/50 transition select-none group",
+            onClick: fn() { dispatch(DrawStockAction) }
+          }, [
+            h("span", { className: "text-amber-400 text-base sm:text-2xl font-black group-hover:rotate-180 transition-transform duration-300" }, "↻"),
+            h("span", { className: "text-[7px] sm:text-[9px] text-amber-300/80 font-mono font-bold leading-none mt-0.5 uppercase" }, "Reset")
+          ])
+        : renderEmptySlot(fn() { dispatch(DrawStockAction) })
+      )
 
   let isWasteSelected = (state.selectedSource == "waste")
-  let wasteEl = state.waste.length > 0
-    ? h("div", { className: "relative hover:-translate-y-1 transition" }, [
-        renderCardUI(state.waste[state.waste.length - 1], isWasteSelected, true, fn() { dispatch(ClickZoneAction("waste", state.waste.length - 1)) })
-      ])
-    : renderEmptySlot(fn() { dispatch(ClickZoneAction("waste", -1)) })
+  let mut wasteCards = []
+  if (state.waste.length == 0) {
+    wasteCards.push(renderEmptySlot(fn() { dispatch(ClickZoneAction("waste", -1)) }))
+  } else {
+    let mut visCount = state.wasteVisibleCount
+    if (visCount <= 0) {
+      visCount = 1
+    }
+    if (visCount > state.waste.length) {
+      visCount = state.waste.length
+    }
+    let startIdx = state.waste.length - visCount
+    for (let mut i = startIdx; i < state.waste.length; i = i + 1) {
+      let captureI = i
+      let isTop = (i == state.waste.length - 1)
+      let isSelected = (isWasteSelected && isTop)
+      let offsetFromStart = i - startIdx
+      let leftOffset = switch (offsetFromStart) {
+        case 1: "left-3 sm:left-5 md:left-7"
+        case 2: "left-6 sm:left-10 md:left-14"
+        default: "left-0"
+      }
+      let posCls = concat("absolute top-0 ", leftOffset)
+      let clickHandler = isTop ? (fn() { dispatch(ClickZoneAction("waste", captureI)) }) : (fn() {})
+      let cardEl = renderCardUI(state.waste[i], isSelected, true, clickHandler)
+      wasteCards.push(h("div", { className: posCls }, [cardEl]))
+    }
+  }
+
+  let wasteContainer = h("div", {
+    className: "relative h-14 sm:h-20 md:h-28 w-16 sm:w-24 md:w-36 flex items-start"
+  }, wasteCards)
 
   let f0El = state.f0.length > 0
     ? renderCardUI(state.f0[state.f0.length - 1], state.selectedSource == "f0", true, fn() { dispatch(ClickZoneAction("f0", state.f0.length - 1)) })
@@ -439,11 +570,11 @@ function renderTopRow() {
     : renderEmptySlot(fn() { dispatch(ClickZoneAction("f3", -1)) })
 
   h("div", { className: "flex justify-between items-start mb-4 sm:mb-6 md:mb-10 px-0 sm:px-2" }, [
-    h("div", { className: "flex space-x-1 sm:space-x-2 md:space-x-4" }, [
+    h("div", { className: "flex space-x-2 sm:space-x-3 md:space-x-4 items-start" }, [
       stockEl,
-      wasteEl
+      wasteContainer
     ]),
-    h("div", { className: "flex space-x-1 sm:space-x-2 md:space-x-4" }, [
+    h("div", { className: "flex space-x-1 sm:space-x-2 md:space-x-4 items-start" }, [
       f0El, f1El, f2El, f3El
     ])
   ])
@@ -477,11 +608,37 @@ function renderTableauCol(colId: string, col: Card[]) {
 }
 
 function renderGame() {
+  let winBanner = state.isWon
+    ? h("div", { className: "mb-4 p-3 sm:p-5 bg-gradient-to-r from-amber-600/30 via-yellow-500/30 to-amber-600/30 border-2 border-yellow-400 rounded-xl sm:rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left shadow-2xl" }, [
+        h("div", {}, [
+          h("h2", { className: "text-base sm:text-2xl font-black text-amber-300 font-serif" }, "🎉 CONGRATULATIONS! YOU WON!"),
+          h("p", { className: "text-xs sm:text-sm text-amber-100/90 mt-0.5" }, concat(concat("All 4 foundations built! Final moves: ", to_string(state.moves)), concat(" | Score: ", to_string(state.score))))
+        ]),
+        h("button", {
+          className: "px-4 py-2 bg-gradient-to-r from-amber-400 to-yellow-400 text-slate-950 font-black rounded-lg sm:rounded-xl shadow-lg cursor-pointer hover:scale-105 transition-all text-xs sm:text-sm uppercase tracking-wider",
+          onClick: fn() { dispatch(DealAction) }
+        }, "Play Again")
+      ])
+    : h("div", { className: "hidden" }, "")
+
   let vnode = h("div", { className: "w-full max-w-5xl mx-auto p-1 sm:p-2 md:p-6 font-sans text-slate-100 min-h-[600px] flex flex-col" }, [
     // Header
-    h("div", { className: "flex flex-wrap justify-between items-center mb-4 sm:mb-6 md:mb-8 pb-3 sm:pb-4 border-b border-emerald-800/50" }, [
-      h("h1", { className: "text-lg sm:text-xl md:text-2xl font-black text-amber-400 tracking-wide font-serif" }, "♠ KLONDIKE SOLITAIRE"),
-      h("div", { className: "flex items-center space-x-2 sm:space-x-4 mt-2 md:mt-0" }, [
+    h("div", { className: "flex flex-wrap justify-between items-center mb-4 sm:mb-6 md:mb-8 pb-3 sm:pb-4 border-b border-emerald-800/50 gap-2" }, [
+      h("div", { className: "flex items-center space-x-2 sm:space-x-3" }, [
+        h("h1", { className: "text-lg sm:text-xl md:text-2xl font-black text-amber-400 tracking-wide font-serif" }, "♠ KLONDIKE SOLITAIRE"),
+        // Draw Mode Switcher (Deal 3 vs Deal 1)
+        h("div", { className: "flex items-center bg-emerald-950/80 p-0.5 rounded-lg border border-emerald-700/60 shadow-inner" }, [
+          h("button", {
+            className: concat("px-2 py-0.5 sm:px-2.5 sm:py-1 rounded text-[10px] sm:text-xs font-bold transition-all cursor-pointer ", state.drawMode == 3 ? "bg-amber-500 text-slate-950 shadow" : "text-emerald-300 hover:text-white"),
+            onClick: fn() { dispatch(SetDrawModeAction(3)) }
+          }, "Deal 3"),
+          h("button", {
+            className: concat("px-2 py-0.5 sm:px-2.5 sm:py-1 rounded text-[10px] sm:text-xs font-bold transition-all cursor-pointer ", state.drawMode == 1 ? "bg-amber-500 text-slate-950 shadow" : "text-emerald-300 hover:text-white"),
+            onClick: fn() { dispatch(SetDrawModeAction(1)) }
+          }, "Deal 1")
+        ])
+      ]),
+      h("div", { className: "flex items-center space-x-2 sm:space-x-3" }, [
         h("div", { className: "px-2 py-1 sm:px-3 bg-emerald-900/50 rounded-lg border border-emerald-700/50 shadow-inner flex items-center" }, [
           h("span", { className: "text-[8px] sm:text-[10px] uppercase text-emerald-400 mr-1 sm:mr-2" }, "Moves"),
           h("span", { className: "font-mono text-sm sm:text-base font-bold text-white" }, to_string(state.moves))
@@ -497,6 +654,8 @@ function renderGame() {
       ])
     ]),
     
+    winBanner,
+
     // Play Area
     h("div", { className: "flex-1 bg-emerald-900/40 rounded-xl sm:rounded-2xl md:rounded-3xl p-2 sm:p-4 md:p-8 border border-emerald-700/30 shadow-2xl overflow-x-hidden" }, [
       renderTopRow(),

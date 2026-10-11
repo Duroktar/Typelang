@@ -8,6 +8,8 @@
     "build": "npm run test && vite build",
     "test": "tsx scripts/test_all.ts",
     "test:codegen": "tsx scripts/test_codegen.ts",
+    "test:harness": "tsx scripts/test_native_harness.ts",
+    "test:native": "tsx scripts/test_native_harness.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",

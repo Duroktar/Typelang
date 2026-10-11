@@ -329,17 +329,28 @@ export class LLVMInterpreter {
   private executeBuiltin(name: string, args: any[]): { handled: boolean; value: any } {
     switch (name) {
       case 'strlen': {
-        const str = args[0] !== undefined && args[0] !== null ? String(args[0]) : '';
+        const arg = args[0];
+        const str = typeof arg === 'object' && arg !== null && '_str' in arg ? String(arg._str) : (arg !== undefined && arg !== null ? String(arg) : '');
         return { handled: true, value: str.length };
       }
       case 'strcpy': {
-        const src = args[1] !== undefined ? String(args[1]) : (args[0] !== undefined ? String(args[0]) : '');
-        return { handled: true, value: src };
+        const dest = args[0];
+        const srcStr = args[1] !== undefined ? (typeof args[1] === 'object' && args[1]?._str !== undefined ? args[1]._str : String(args[1])) : '';
+        if (dest && typeof dest === 'object') {
+          dest._str = srcStr;
+          return { handled: true, value: dest };
+        }
+        return { handled: true, value: srcStr };
       }
       case 'strcat': {
-        const a = args[0] !== undefined && args[0] !== null ? String(args[0]) : '';
-        const b = args[1] !== undefined && args[1] !== null ? String(args[1]) : '';
-        return { handled: true, value: a + b };
+        const dest = args[0];
+        const addStr = args[1] !== undefined ? (typeof args[1] === 'object' && args[1]?._str !== undefined ? args[1]._str : String(args[1])) : '';
+        if (dest && typeof dest === 'object') {
+          dest._str = (dest._str || '') + addStr;
+          return { handled: true, value: dest };
+        }
+        const a = String(args[0] ?? '');
+        return { handled: true, value: a + addStr };
       }
       case 'strcmp': {
         const a = String(args[0] ?? '');
@@ -420,10 +431,14 @@ export class LLVMInterpreter {
         return { handled: true, value: 1 };
       }
       case 'sprintf': {
-        const fmt = String(args[1] ?? args[0] ?? '');
+        const dest = args[0];
+        const fmt = String(args[1] ?? '');
         const restArgs = args.slice(2);
         const formatted = this.formatPrintf(fmt, restArgs);
-        return { handled: true, value: formatted };
+        if (dest && typeof dest === 'object') {
+          dest._str = formatted;
+        }
+        return { handled: true, value: formatted.length };
       }
       case 'printf': {
         const fmt = String(args[0] ?? '');
@@ -605,8 +620,16 @@ export class LLVMInterpreter {
             loadedVal = frame.allocas.get(ptrName).value;
           } else if (frame.locals.has(ptrName)) {
             const loc = frame.locals.get(ptrName);
-            if (typeof loc === 'object' && loc !== null && 'value' in loc) {
-              loadedVal = loc.value;
+            if (typeof loc === 'object' && loc !== null) {
+              if ('_structRef' in loc && loc._structRef) {
+                loadedVal = loc._fieldIdx === 0 ? loc._structRef.tag : loc._structRef.payload;
+              } else if ('_bufRef' in loc && loc._bufRef) {
+                loadedVal = loc._bufRef._data ? loc._bufRef._data[loc._offset] : 0;
+              } else if ('value' in loc) {
+                loadedVal = loc.value;
+              } else {
+                loadedVal = loc;
+              }
             } else if (typeof loc === 'number' && this.heap.has(loc)) {
               loadedVal = this.heap.get(loc);
             } else {
@@ -753,7 +776,7 @@ export class LLVMInterpreter {
 
       // GEP: getelementptr inbounds ...
       if (rhs.startsWith('getelementptr ')) {
-        if (rhs.includes('@.str')) {
+        if (rhs.includes('@')) {
           const match = rhs.match(/@([a-zA-Z0-9_.]+)/);
           if (match) {
             const sym = match[1];
@@ -766,6 +789,16 @@ export class LLVMInterpreter {
             const fieldIdx = parseInt(match[2], 10);
             const structVal = frame.locals.get(structVar) || this.heap.get(frame.locals.get(structVar));
             frame.locals.set(destReg, { _structRef: structVal, _fieldIdx: fieldIdx });
+          }
+        } else if (rhs.includes('i8*') && rhs.includes('i64')) {
+          const match = rhs.match(/i8\*\s+([%a-zA-Z0-9_.]+),\s+i64\s+(\d+)/);
+          if (match) {
+            const bufVar = match[1].replace(/^%/, '');
+            const offset = parseInt(match[2], 10);
+            const bufVal = frame.locals.get(bufVar) || this.heap.get(frame.locals.get(bufVar));
+            frame.locals.set(destReg, { _bufRef: bufVal, _offset: offset });
+          } else {
+            frame.locals.set(destReg, destReg);
           }
         } else {
           frame.locals.set(destReg, destReg);
@@ -792,6 +825,9 @@ export class LLVMInterpreter {
             if ('_structRef' in loc) {
               if (loc._fieldIdx === 0) loc._structRef.tag = Number(val);
               else loc._structRef.payload = val;
+            } else if ('_bufRef' in loc && loc._bufRef) {
+              loc._bufRef._data = loc._bufRef._data || {};
+              loc._bufRef._data[loc._offset] = val;
             } else {
               loc.value = val;
             }
@@ -819,29 +855,42 @@ export class LLVMInterpreter {
   private executeCall(callStr: string, frame: StackFrame): any {
     const trimmed = callStr.trim();
 
-    // 1. Locate argument list (...) at the end
-    const lastOpenParen = trimmed.lastIndexOf('(');
-    const lastCloseParen = trimmed.lastIndexOf(')');
+    // 1. Locate callee (@fn or %reg) and argument list (...)
+    const callMatch = trimmed.match(/call\s+(?:.*?\s+)?([@%][a-zA-Z0-9_.\-]+)\s*\((.*)\)$/s);
+    let calleeToken = '';
+    let argsSubstring = '';
 
-    if (lastOpenParen === -1 || lastCloseParen <= lastOpenParen) {
-      return 0;
+    if (callMatch) {
+      calleeToken = callMatch[1].replace(/^@/, '');
+      argsSubstring = callMatch[2].trim();
+    } else {
+      const lastOpenParen = trimmed.lastIndexOf('(');
+      const lastCloseParen = trimmed.lastIndexOf(')');
+
+      if (lastOpenParen === -1 || lastCloseParen <= lastOpenParen) {
+        return 0;
+      }
+
+      argsSubstring = trimmed.slice(lastOpenParen + 1, lastCloseParen).trim();
+      const prefix = trimmed.slice(0, lastOpenParen).trim();
+      const prefixTokens = prefix.split(/\s+/);
+      calleeToken = prefixTokens[prefixTokens.length - 1].replace(/^@/, '');
     }
 
-    const argsSubstring = trimmed.slice(lastOpenParen + 1, lastCloseParen).trim();
-    const prefix = trimmed.slice(0, lastOpenParen).trim();
-
-    // 2. Extract callee token from prefix
-    const prefixTokens = prefix.split(/\s+/);
-    let calleeToken = prefixTokens[prefixTokens.length - 1];
-    calleeToken = calleeToken.replace(/^@/, '');
-
-    // 3. Evaluate argument expressions
+    // 2. Evaluate argument expressions
     const argValues: any[] = [];
     if (argsSubstring.length > 0) {
       const argTokens = this.splitArgsList(argsSubstring);
       for (const tok of argTokens) {
-        const parts = tok.trim().split(/\s+/);
-        const valPart = parts[parts.length - 1];
+        const trimmedTok = tok.trim();
+        let valPart = trimmedTok;
+        if (trimmedTok.includes('getelementptr')) {
+          const gepIdx = trimmedTok.indexOf('getelementptr');
+          valPart = trimmedTok.slice(gepIdx);
+        } else {
+          const parts = trimmedTok.split(/\s+/);
+          valPart = parts[parts.length - 1];
+        }
         argValues.push(this.resolveValue(valPart, frame));
       }
     }
@@ -891,32 +940,43 @@ export class LLVMInterpreter {
     let argIdx = 0;
     let formatted = '';
     for (let i = 0; i < fmt.length; i++) {
-      if (fmt[i] === '%' && i + 1 < fmt.length) {
-        const next = fmt[i + 1];
-        if (next === 's') {
-          const val = argIdx < args.length ? args[argIdx++] : '';
-          formatted += typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val);
-          i++;
-          continue;
-        } else if (next === 'f' || next === 'g') {
-          const val = argIdx < args.length ? Number(args[argIdx++]) : 0;
-          formatted += Number.isInteger(val) ? `${val}.0` : String(val);
-          i++;
-          continue;
-        } else if (next === 'd' || next === 'i') {
-          const val = argIdx < args.length ? Math.trunc(Number(args[argIdx++])) : 0;
-          formatted += String(val);
-          i++;
-          continue;
-        } else if (fmt.slice(i + 1, i + 4) === 'lld') {
-          const val = argIdx < args.length ? Math.trunc(Number(args[argIdx++])) : 0;
-          formatted += String(val);
-          i += 3;
-          continue;
-        } else if (next === '%') {
-          formatted += '%';
-          i++;
-          continue;
+      if (fmt[i] === '%') {
+        const rest = fmt.slice(i);
+        const m = rest.match(/^%(lld|(?:\.[0-9]+)?[sfgdi%])/);
+        if (m) {
+          const spec = m[1];
+          i += m[0].length - 1;
+          if (spec === '%') {
+            formatted += '%';
+            continue;
+          }
+          if (spec === 's') {
+            const val = argIdx < args.length ? args[argIdx++] : '';
+            let strVal = '';
+            if (typeof val === 'object' && val !== null) {
+              if ('_str' in val) strVal = String(val._str);
+              else strVal = JSON.stringify(val);
+            } else {
+              strVal = String(val);
+            }
+            formatted += strVal;
+            continue;
+          }
+          if (spec.endsWith('g')) {
+            const val = argIdx < args.length ? Number(args[argIdx++]) : 0;
+            formatted += String(Number(val.toPrecision(12)));
+            continue;
+          }
+          if (spec.endsWith('f')) {
+            const val = argIdx < args.length ? Number(args[argIdx++]) : 0;
+            formatted += Number.isInteger(val) ? `${val}.0` : String(val);
+            continue;
+          }
+          if (spec.endsWith('d') || spec.endsWith('i') || spec === 'lld') {
+            const val = argIdx < args.length ? Math.trunc(Number(args[argIdx++])) : 0;
+            formatted += String(val);
+            continue;
+          }
         }
       }
       formatted += fmt[i];

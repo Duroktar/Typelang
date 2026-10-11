@@ -1,0 +1,66 @@
+=== TYPELANG NATIVE BOOTSTRAP SUITE ===
+[TEST 1: PRIMITIVES & ARITHMETIC]
+int: 42
+float: 3.14159
+neg: -15
+bool: true, false
+arith: 25.5
+mod: 2
+precedence: 14
+[TEST 2: STRINGS & CONCATENATION]
+escaped: Line 1\nLine 2\tTabbed
+concat: Hello, TypeLang Native World!
+[TEST 3: VARIABLES & MUTABILITY]
+reassign: 150
+shadowing: inner=200, outer=100
+block_expr: 169
+[TEST 4: FUNCTIONS & RECURSION]
+add: 55
+factorial(6): 720
+fibonacci(10): 55
+mutual_even(8): true
+mutual_odd(8): false
+early_return: 42
+[TEST 5: FIRST-CLASS FUNCTIONS & CLOSURES]
+lambda_square: 64
+higher_order_apply: 21
+closure_adder: 45
+[TEST 6: CONTROL FLOW & LOOPS]
+if_branch: positive
+ternary: pass
+while_loop: sum=15
+while_break_continue: 26
+for_loop: total=30
+nested_loops: cells=9
+switch_case: Wednesday
+[TEST 7: STRUCTURAL RECORDS]
+point: x=10, y=20
+nested_record: host=localhost, port=8080
+record_update: old=20, updated=99
+[TEST 8: TUPLES & ARRAYS]
+tuple_items: first=100, second=Centum
+tuple_return: quot=3, rem=2
+array_index: 30
+[TEST 9: ALGEBRAIC DATA TYPES & GADTS]
+enum: Green
+maybe: 42
+list_sum: 60
+gadt_eval: 25
+[TEST 10: PATTERN MATCHING]
+literal_match: Two
+constructor_unwrap: 99
+multi_arg_ctor: 40
+guard_match: Large Circle
+tuple_pattern: 25
+record_pattern: Bob (Admin)
+fallback_pattern: finished
+[TEST 11: MODULES & NAMESPACES]
+module_call: 49
+nested_module: Greetings, Commander
+[TEST 12: MONADIC WHERE CLAUSES]
+where_computation: 40
+[TEST 13: MATH STANDARD LIBRARY]
+sqrt: 7
+floor: 9
+abs: 12.5
+=== ALL TESTS PASSED SUCCESSFULLY ===

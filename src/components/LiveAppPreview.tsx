@@ -124,12 +124,14 @@ export const LiveAppPreview: React.FC<LiveAppPreviewProps> = ({
       }
     };
 
-    // Mount container reference expected by code
-    const $mountTarget = document.getElementById('app-root');
+    (function() {
+      // Mount container reference expected by code
+      const $mountTarget = document.getElementById('app-root');
 
-    // Compiled TypeLang code starts here
-    ${jsCode}
-    // Compiled TypeLang code ends here
+      // Compiled TypeLang code starts here
+      ${jsCode}
+      // Compiled TypeLang code ends here
+    })();
   </script>
 </body>
 </html>`;

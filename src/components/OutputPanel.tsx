@@ -925,7 +925,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                             {gadt.constructors.map((c, cIdx) => (
                               <div key={`ctor-${c.name}-${cIdx}`}>
                                 • {c.name}(
-                                {c.params.map(p => `${p.name}: ${typeToString(p.type)}`).join(', ')})
+                                {c.params.map(p => `${p.name}: ${typeASTToString(p.type)}`).join(', ')})
                               </div>
                             ))}
                           </div>

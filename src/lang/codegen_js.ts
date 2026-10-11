@@ -999,8 +999,23 @@ export class JSCodeGenerator {
         const safeName = sanitizeIdent(stmt.name);
         this.addLocalVar(stmt.name);
         const symbol = stmt.jsSymbol || stmt.name;
+        const BROWSER_BUILTIN_GLOBALS = new Set([
+          'window',
+          'document',
+          'globalThis',
+          'console',
+          'location',
+          'navigator',
+          'history',
+          'self',
+          'top',
+          'parent',
+        ]);
         if (stmt.name === 'window' || symbol === 'window') {
-          return `${this.indent()}const ${safeName} = (typeof globalThis !== "undefined" ? (globalThis.window || globalThis) : undefined);`;
+          return `${this.indent()}if (typeof globalThis !== "undefined" && typeof globalThis.window === "undefined") { globalThis.window = globalThis; }`;
+        }
+        if (BROWSER_BUILTIN_GLOBALS.has(stmt.name) || BROWSER_BUILTIN_GLOBALS.has(symbol)) {
+          return `${this.indent()}// extern value ${stmt.name} is provided by the global environment`;
         }
         return `${this.indent()}const ${safeName} = (typeof globalThis !== "undefined" && "${symbol}" in globalThis ? globalThis["${symbol}"] : (typeof globalThis !== "undefined" ? globalThis["${symbol}"] : undefined));`;
       }
