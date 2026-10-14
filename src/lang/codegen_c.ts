@@ -97,6 +97,7 @@ export class CCodeGenerator {
 
   private currentModulePath: string[] = [];
   private zeroArityCtors = new Set<string>(['None', 'Nil']);
+  private lambdaDecls: string[] = [];
 
   private freshVar(prefix = '_t'): string {
     return `${prefix}_${++this.tempVarCounter}`;
@@ -191,6 +192,12 @@ export class CCodeGenerator {
             : typeName;
           decls.push(this.isCpp ? `using ${typeName} = TLValue;` : `typedef TLValue ${fullTypeName};`);
         }
+      } else if (stmt.kind === 's_let') {
+        const varName = sanitizeCIdent(stmt.name);
+        const fullVarName = (!this.isCpp && modPath.length > 0)
+          ? `${modPath.map(sanitizeCIdent).join('_')}_${varName}`
+          : varName;
+        decls.push(`extern TLValue ${fullVarName};`);
       } else if (stmt.kind === 's_module') {
         if (!this.isCpp) {
           const nextModPath = [...modPath, stmt.name];
@@ -213,6 +220,7 @@ export class CCodeGenerator {
     this.localScopeVars = [];
     this.currentModulePath = [];
     this.zeroArityCtors = new Set<string>(['None', 'Nil']);
+    this.lambdaDecls = [];
     this.isCpp = options.target !== 'c';
     const lines: string[] = [];
 
@@ -231,7 +239,7 @@ export class CCodeGenerator {
     if (program && program.statements) {
       for (const stmt of program.statements) {
         if (!stmt) continue;
-        if (stmt.kind === 's_function' || stmt.kind === 's_gadt' || stmt.kind === 's_type_alias' || stmt.kind === 's_module' || stmt.kind === 's_import') {
+        if (stmt.kind === 's_function' || stmt.kind === 's_gadt' || stmt.kind === 's_type_alias' || stmt.kind === 's_module' || stmt.kind === 's_import' || stmt.kind === 's_let') {
           const s = this.generateStatement(stmt);
           if (s.trim()) topLevelDecls.push(s);
         } else {
@@ -247,6 +255,12 @@ export class CCodeGenerator {
       lines.push('');
     }
 
+    if (this.lambdaDecls.length > 0) {
+      lines.push('// Generated Lambda Functions');
+      lines.push(this.lambdaDecls.join('\n\n'));
+      lines.push('');
+    }
+
     if (topLevelDecls.length > 0) {
       lines.push('// Top-Level Declarations & Modules');
       lines.push(topLevelDecls.join('\n\n'));
@@ -259,6 +273,7 @@ export class CCodeGenerator {
       lines.push('  // Initialize runtime environment');
       lines.push('  (void)argc; (void)argv;');
       if (this.isCpp) {
+        lines.push('  for (int i = 0; i < argc; ++i) { typelang::get_global_argv().push_back(argv[i]); }');
         lines.push('  try {');
         this.indentLevel = 2;
         for (const stmtStr of mainBodyStatements) {
@@ -275,6 +290,7 @@ export class CCodeGenerator {
         lines.push('    return 1;');
         lines.push('  }');
       } else {
+        lines.push('  _tl_argc = argc; _tl_argv = argv;');
         this.indentLevel = 1;
         for (const stmtStr of mainBodyStatements) {
           if (stmtStr.trim()) {
@@ -304,6 +320,7 @@ export class CCodeGenerator {
 // ============================================================================
 #include <iostream>
 #include <string>
+#include <fstream>
 #include <vector>
 #include <map>
 #include <memory>
@@ -547,6 +564,31 @@ public:
     return TLValue(static_cast<double>(a % b));
   }
 
+  TLValue& operator+=(const TLValue& other) {
+    *this = *this + other;
+    return *this;
+  }
+
+  TLValue& operator-=(const TLValue& other) {
+    *this = *this - other;
+    return *this;
+  }
+
+  TLValue& operator*=(const TLValue& other) {
+    *this = *this * other;
+    return *this;
+  }
+
+  TLValue& operator/=(const TLValue& other) {
+    *this = *this / other;
+    return *this;
+  }
+
+  TLValue& operator%=(const TLValue& other) {
+    *this = *this % other;
+    return *this;
+  }
+
   TLValue operator==(const TLValue& other) const {
     if (kind != other.kind) {
       if (kind == TLKind::Number && other.kind == TLKind::Number) {
@@ -633,6 +675,39 @@ public:
     return TLValue();
   }
 
+  TLValue& operator[](const TLValue& key) {
+    if (kind == TLKind::Array) {
+      if (!arr_val) arr_val = std::make_shared<TLArray>();
+      int64_t idx = key.to_int();
+      if (idx >= 0) {
+        if (idx >= static_cast<int64_t>(arr_val->size())) {
+          arr_val->resize(idx + 1);
+        }
+        return (*arr_val)[idx];
+      }
+    }
+    if (kind == TLKind::Record || kind == TLKind::Null) {
+      if (kind != TLKind::Record) {
+        kind = TLKind::Record;
+        rec_val = std::make_shared<TLRecord>();
+      }
+      return (*rec_val)[key.to_string()];
+    }
+    static TLValue dummy;
+    dummy = TLValue();
+    return dummy;
+  }
+
+  TLValue push_val(const TLValue& item) {
+    if (kind != TLKind::Array) {
+      kind = TLKind::Array;
+      arr_val = std::make_shared<TLArray>();
+    }
+    if (!arr_val) arr_val = std::make_shared<TLArray>();
+    arr_val->push_back(item);
+    return *this;
+  }
+
   TLValue get(const std::string& key) const {
     return (*this)[TLValue(key)];
   }
@@ -713,6 +788,37 @@ inline TLValue time_now() {
   auto now = std::chrono::high_resolution_clock::now().time_since_epoch();
   double ms = std::chrono::duration<double, std::milli>(now).count();
   return TLValue(ms);
+}
+
+inline std::vector<std::string>& get_global_argv() {
+  static std::vector<std::string> argv;
+  return argv;
+}
+
+inline TLValue get_cli_arg(const TLValue& idx) {
+  const auto& argv = get_global_argv();
+  int64_t i = idx.to_int();
+  if (i >= 0 && i < static_cast<int64_t>(argv.size())) {
+    return TLValue(argv[i]);
+  }
+  return TLValue("");
+}
+
+inline TLValue read_file(const TLValue& path) {
+  std::string p = path.to_string();
+  std::ifstream f(p, std::ios::in | std::ios::binary);
+  if (!f.is_open()) return TLValue("");
+  std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  return TLValue(content);
+}
+
+inline TLValue write_file(const TLValue& path, const TLValue& content) {
+  std::string p = path.to_string();
+  std::string c = content.to_string();
+  std::ofstream f(p, std::ios::out | std::ios::binary);
+  if (!f.is_open()) return TLValue(false);
+  f << c;
+  return TLValue(true);
 }
 
 // Option & Result GADT Constructors
@@ -929,6 +1035,14 @@ namespace String {
     }
     result.push_back(TLValue(s.substr(prev)));
     return TLValue(result);
+  }
+  inline TLValue slice(const TLValue& str, const TLValue& start, const TLValue& end) {
+    return substring(str, start, end);
+  }
+  inline TLValue contains(const TLValue& str, const TLValue& substr) {
+    std::string s = str.to_string();
+    std::string sub = substr.to_string();
+    return TLValue(s.find(sub) != std::string::npos);
   }
   inline TLValue parse_int(const TLValue& s) { return typelang::parse_int(s); }
   inline TLValue parseInt(const TLValue& s) { return typelang::parse_int(s); }
@@ -1219,6 +1333,8 @@ using namespace typelang;
 // TypeLang Native C Target (C11 / C99 Compatible)
 // Generated by TypeLang Native Multi-Target Compiler Backend
 // ============================================================================
+#define _GNU_SOURCE
+#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1309,6 +1425,13 @@ static inline TLValue tl_str(const char* s) {
   v.kind = TL_KIND_STR;
   if (!s) s = "";
   v.u.s = strdup(s);
+  return v;
+}
+
+static inline TLValue tl_fn(TL_FnPtr fn) {
+  TLValue v;
+  v.kind = TL_KIND_FN;
+  v.u.fn = fn;
   return v;
 }
 
@@ -1648,6 +1771,95 @@ static inline TLValue String_split(TLValue str, TLValue delim) {
   return res;
 }
 
+static inline TLValue String_slice(TLValue str, TLValue start, TLValue end) {
+  if (str.kind != TL_KIND_STR || !str.u.s) return tl_str("");
+  int64_t len = (int64_t)strlen(str.u.s);
+  int64_t s = (int64_t)tl_to_num(start);
+  int64_t e = (int64_t)tl_to_num(end);
+  if (s < 0) s = 0;
+  if (e > len) e = len;
+  if (s >= e) return tl_str("");
+  int64_t sub_len = e - s;
+  char* buf = (char*)malloc(sub_len + 1);
+  if (!buf) return tl_str("");
+  memcpy(buf, str.u.s + s, sub_len);
+  buf[sub_len] = '\0';
+  TLValue res = tl_str(buf);
+  free(buf);
+  return res;
+}
+static inline TLValue String_substring(TLValue str, TLValue start, TLValue end) { return String_slice(str, start, end); }
+static inline TLValue String_charAt(TLValue str, TLValue idx) {
+  int64_t i = (int64_t)tl_to_num(idx);
+  return String_slice(str, tl_num((double)i), tl_num((double)(i + 1)));
+}
+static inline TLValue String_contains(TLValue str, TLValue substr) {
+  if (str.kind != TL_KIND_STR || !str.u.s || substr.kind != TL_KIND_STR || !substr.u.s) return tl_bool(false);
+  return tl_bool(strstr(str.u.s, substr.u.s) != NULL);
+}
+
+static inline TLValue Array_push(TLValue arr, TLValue item) {
+  if (arr.kind != TL_KIND_ARR || !arr.u.arr) {
+    return tl_array(1, &item);
+  }
+  TL_Array* a = arr.u.arr;
+  if (a->len >= a->cap) {
+    size_t new_cap = a->cap < 4 ? 4 : a->cap * 2;
+    TL_Val* new_items = (TL_Val*)realloc(a->items, sizeof(TL_Val) * new_cap);
+    if (new_items) { a->items = new_items; a->cap = new_cap; }
+  }
+  if (a->len < a->cap) {
+    a->items[a->len++] = item;
+  }
+  return arr;
+}
+
+static int _tl_argc = 0;
+static char** _tl_argv = NULL;
+
+static inline TLValue get_cli_arg(TLValue idx) {
+  int64_t i = (int64_t)tl_to_num(idx);
+  if (i >= 0 && i < _tl_argc && _tl_argv && _tl_argv[i]) {
+    return tl_str(_tl_argv[i]);
+  }
+  return tl_str("");
+}
+static inline TLValue tl_get_cli_arg(TLValue idx) { return get_cli_arg(idx); }
+
+static inline TLValue read_file(TLValue path) {
+  if (path.kind != TL_KIND_STR || !path.u.s) return tl_str("");
+  FILE* f = fopen(path.u.s, "rb");
+  if (!f) return tl_str("");
+  fseek(f, 0, SEEK_END);
+  long len = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (len < 0) { fclose(f); return tl_str(""); }
+  char* buf = (char*)malloc(len + 1);
+  if (!buf) { fclose(f); return tl_str(""); }
+  size_t read_bytes = fread(buf, 1, len, f);
+  buf[read_bytes] = '\0';
+  fclose(f);
+  TLValue res = tl_str(buf);
+  free(buf);
+  return res;
+}
+static inline TLValue tl_read_file(TLValue path) { return read_file(path); }
+
+static inline TLValue write_file(TLValue path, TLValue content) {
+  if (path.kind != TL_KIND_STR || !path.u.s) return tl_bool(false);
+  const char* text = (content.kind == TL_KIND_STR && content.u.s) ? content.u.s : "";
+  FILE* f = fopen(path.u.s, "wb");
+  if (!f) return tl_bool(false);
+  fputs(text, f);
+  fclose(f);
+  return tl_bool(true);
+}
+static inline TLValue tl_write_file(TLValue path, TLValue content) { return write_file(path, content); }
+
+static inline TLValue time_now(void) {
+  return tl_num(0.0);
+}
+
 static inline TLValue Array_len(TLValue arr) {
   if (arr.kind == TL_KIND_ARR && arr.u.arr) return tl_num((double)arr.u.arr->len);
   return tl_num(0.0);
@@ -1729,10 +1941,13 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
         const isLocalLambda = this.isCpp && wasInside;
         this.insideFunction = wasInside;
         
-        if (isLocalLambda) {
-          const paramListLocal = (stmt.params || []).map(p => `const TLValue& ${sanitizeCIdent(p.name)}`);
-          const paramStrLocal = paramListLocal.join(', ');
-          return `${this.indent()}auto ${safeName} = [&](${paramStrLocal}) -> TLValue {\n${whereStr}${bodyStr}\n${this.indent()}};`;
+        if (this.isCpp) {
+          if (isLocalLambda) {
+            const paramListLocal = (stmt.params || []).map(p => `const TLValue& ${sanitizeCIdent(p.name)}`);
+            const paramStrLocal = paramListLocal.join(', ');
+            return `${this.indent()}auto ${safeName} = [&](${paramStrLocal}) -> TLValue {\n${whereStr}  try {\n${bodyStr}\n  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }\n${this.indent()}};`;
+          }
+          return `${this.indent()}TLValue ${safeName}(${paramStr}) {\n${whereStr}  try {\n${bodyStr}\n  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }\n${this.indent()}}`;
         }
         
         return `${this.indent()}TLValue ${safeName}(${paramStr}) {\n${whereStr}${bodyStr}\n${this.indent()}}`;
@@ -1935,7 +2150,7 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
 
       case 'e_var': {
         const isLocal = this.isLocalVar(expr.name);
-        const corePrimitives = ['print', 'println', 'to_string', 'concat', 'parse_int', 'parse_float', 'time_now'];
+        const corePrimitives = ['print', 'println', 'to_string', 'concat', 'parse_int', 'parse_float', 'time_now', 'get_cli_arg', 'read_file', 'write_file'];
         const stdModules = ['Math', 'Array', 'String', 'Option', 'Result'];
 
         if (!isLocal && this.zeroArityCtors.has(expr.name) && (!expr.modulePath || expr.modulePath.length === 0)) {
@@ -2017,18 +2232,33 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
         const val = this.generateExpr(expr.value);
         const op = expr.op || '=';
         if (expr.target.kind === 'e_var') {
-          return `(${sanitizeCIdent(expr.target.name)} ${op} ${val})`;
+          if (this.isCpp) {
+            return `(${sanitizeCIdent(expr.target.name)} ${op} ${val})`;
+          } else {
+            const targetName = sanitizeCIdent(expr.target.name);
+            if (op === '+=') return `(${targetName} = tl_add(${targetName}, ${val}))`;
+            if (op === '-=') return `(${targetName} = tl_sub(${targetName}, ${val}))`;
+            if (op === '*=') return `(${targetName} = tl_mul(${targetName}, ${val}))`;
+            if (op === '/=') return `(${targetName} = tl_div(${targetName}, ${val}))`;
+            if (op === '%=') return `(${targetName} = tl_mod(${targetName}, ${val}))`;
+            return `(${targetName} = ${val})`;
+          }
         } else if (expr.target.kind === 'e_field_access') {
           const obj = this.generateExpr(expr.target.object);
           if (this.isCpp) {
-            return `(${obj}.set("${expr.target.field}", ${val}), ${val})`;
+            if (op === '=') {
+              return `(${obj}.set("${expr.target.field}", ${val}), ${val})`;
+            } else {
+              const binOp = op.slice(0, -1);
+              return `(${obj}.set("${expr.target.field}", (${obj}.get("${expr.target.field}") ${binOp} ${val})), ${obj}.get("${expr.target.field}"))`;
+            }
           } else {
             return `(${val})`;
           }
         } else if (expr.target.kind === 'e_index') {
           const obj = this.generateExpr(expr.target.target);
           const idx = this.generateExpr(expr.target.index);
-          return `(${obj}[${idx}] = ${val})`;
+          return `(${obj}[${idx}] ${op} ${val})`;
         }
         return `(${val})`;
       }
@@ -2099,11 +2329,23 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
           }
         }
         if (this.isCpp) {
+          if (expr.method === 'push' && args.length > 0) {
+            return `${obj}.push_val(${args[0]})`;
+          }
+          if (expr.method === 'len' || expr.method === 'length') {
+            return `typelang::Array::len(${obj})`;
+          }
           if ((expr as any).isModuleMethod) {
             return `${obj}.get("${expr.method}").call({${args.join(', ')}})`;
           }
           return `${obj}.get("${expr.method}").call({${[obj, ...args].join(', ')}})`;
         } else {
+          if (expr.method === 'push' && args.length > 0) {
+            return `tl_array_push(${obj}, ${args[0]})`;
+          }
+          if (expr.method === 'len' || expr.method === 'length') {
+            return `tl_len(${obj})`;
+          }
           return `tl_get_field(${obj}, "${expr.method}")`;
         }
       }
@@ -2198,9 +2440,13 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
 
         if (this.isCpp) {
           const argsBindings = (expr.params || []).map((p, idx) => `TLValue ${sanitizeCIdent(p.name)} = (_args.size() > ${idx} ? _args[${idx}] : TLValue());`).join(' ');
-          return `TLValue(TLFunction([&](const std::vector<TLValue>& _args) -> TLValue {\n  ${argsBindings}\n  ${bodyStr}\n}))`;
+          return `TLValue(TLFunction([&](const std::vector<TLValue>& _args) -> TLValue {\n  ${argsBindings}\n  try {\n${bodyStr}\n  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }\n}))`;
         } else {
-          return 'tl_null()';
+          const lambdaName = this.freshVar('_tl_lambda');
+          const argsBindings = (expr.params || []).map((p, idx) => `  TLValue ${sanitizeCIdent(p.name)} = (argc > ${idx} ? argv[${idx}] : tl_null());`).join('\n');
+          const lambdaDef = `static TLValue ${lambdaName}(size_t argc, const TLValue* argv) {\n  (void)argc; (void)argv;\n${argsBindings}\n${bodyStr}\n}`;
+          this.lambdaDecls.push(lambdaDef);
+          return `tl_fn(${lambdaName})`;
         }
       }
 
@@ -2284,12 +2530,15 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
           }
         }
         const res = expr.result ? this.generateExpr(expr.result) : (this.isCpp ? 'TLValue()' : 'tl_null()');
-        lines.push(`${this.indent()}return ${res};`);
-        this.popScope();
-        this.indentLevel--;
         if (this.isCpp) {
+          lines.push(`${this.indent()}return ${res};`);
+          this.popScope();
+          this.indentLevel--;
           return `[&]() -> TLValue {\n${lines.join('\n')}\n}()`;
         } else {
+          lines.push(`${this.indent()}${res};`);
+          this.popScope();
+          this.indentLevel--;
           return `({\n${lines.join('\n')}\n})`;
         }
       }
@@ -2333,7 +2582,9 @@ static inline TLValue Array_reduce(TLValue arr, TLValue init, TLValue fn) {
         this.insideFunction = true;
         const stmts = (expr.bindings || []).map(s => this.generateStatement(s)).join('\n');
         this.insideFunction = wasInside;
-        const res = `${this.indent()}return ${this.generateExpr(expr.expr)};`;
+        const res = this.isCpp
+          ? `${this.indent()}return ${this.generateExpr(expr.expr)};`
+          : `${this.indent()}${this.generateExpr(expr.expr)};`;
         this.indentLevel--;
         this.popScope();
         if (this.isCpp) {

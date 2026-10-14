@@ -2,10 +2,19 @@ import { ExampleProgram } from "./types";
 
 export const example35SelfHostedCompiler: ExampleProgram = {
   id: 'self_hosted_compiler',
-  name: '35. Self-Hosted TypeLang Compiler (Bootstrap in TypeLang)',
+  name: '35. Self-Hosted TypeLang Compiler (Deprecated - see /bootstrap)',
   category: 'Self-Hosting & Bootstrap',
-  description: 'A complete TypeLang compiler pipeline implemented entirely in TypeLang, featuring an incremental Lexer, Recursive-Descent AST Parser, Semantic Type Checker, JavaScript & LLVM SSA Code Generators, and a Self-Hosted Virtual Machine AST Evaluator.',
+  description: 'DEPRECATED: See dedicated /bootstrap directory for the production multi-stage C11 self-hosted compiler. This single-file reference is preserved for historical and test continuity.',
   code: `// =========================================================================
+// [DEPRECATION NOTICE]
+// This single-file compiler is preserved for historical and test continuity.
+// The production, modular TypeLang self-hosted compiler suite has moved to:
+//   /bootstrap/
+// Featuring:
+//   - Dedicated modules: tokens.tl, lexer.tl, ast.tl, parser.tl, checker.tl, codegen_c.tl, main.tl
+//   - Portable C11/C99 code generation target
+//   - Multi-stage bootstrap verification ('npm run bootstrap')
+// =========================================================================
 // TypeLang Self-Hosted Compiler (Bootstrap Pipeline in TypeLang)
 //
 // Pipeline Stages:

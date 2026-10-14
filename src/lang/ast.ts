@@ -382,7 +382,7 @@ export interface EAssign {
   kind: 'e_assign';
   target: Expr; // EVar or EFieldAccess
   value: Expr;
-  op?: '=' | '+=' | '-=' | '*=' | '/=';
+  op?: '=' | '+=' | '-=' | '*=' | '/=' | '%=';
   loc?: SourceLoc;
 }
 

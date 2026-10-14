@@ -300,6 +300,7 @@ export class Lexer {
         this.advance(1);
         const next = this.input[this.pos];
         if (next === 'n') str += '\n';
+        else if (next === 'r') str += '\r';
         else if (next === 't') str += '\t';
         else if (next === '\\') str += '\\';
         else if (next === quote) str += quote;

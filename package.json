@@ -10,6 +10,8 @@
     "test:codegen": "tsx scripts/test_codegen.ts",
     "test:harness": "tsx scripts/test_native_harness.ts",
     "test:native": "tsx scripts/test_native_harness.ts",
+    "test:bootstrap": "tsx scripts/test_bootstrap_pipeline.ts",
+    "bootstrap": "tsx scripts/test_bootstrap_pipeline.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",

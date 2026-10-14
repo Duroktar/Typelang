@@ -247,6 +247,31 @@ public:
     return TLValue(static_cast<double>(a % b));
   }
 
+  TLValue& operator+=(const TLValue& other) {
+    *this = *this + other;
+    return *this;
+  }
+
+  TLValue& operator-=(const TLValue& other) {
+    *this = *this - other;
+    return *this;
+  }
+
+  TLValue& operator*=(const TLValue& other) {
+    *this = *this * other;
+    return *this;
+  }
+
+  TLValue& operator/=(const TLValue& other) {
+    *this = *this / other;
+    return *this;
+  }
+
+  TLValue& operator%=(const TLValue& other) {
+    *this = *this % other;
+    return *this;
+  }
+
   TLValue operator==(const TLValue& other) const {
     if (kind != other.kind) {
       if (kind == TLKind::Number && other.kind == TLKind::Number) {
@@ -331,6 +356,29 @@ public:
       if (k == "$tag") return TLValue(var_val->tag);
     }
     return TLValue();
+  }
+
+  TLValue& operator[](const TLValue& key) {
+    if (kind == TLKind::Array) {
+      if (!arr_val) arr_val = std::make_shared<TLArray>();
+      int64_t idx = key.to_int();
+      if (idx >= 0) {
+        if (idx >= static_cast<int64_t>(arr_val->size())) {
+          arr_val->resize(idx + 1);
+        }
+        return (*arr_val)[idx];
+      }
+    }
+    if (kind == TLKind::Record || kind == TLKind::Null) {
+      if (kind != TLKind::Record) {
+        kind = TLKind::Record;
+        rec_val = std::make_shared<TLRecord>();
+      }
+      return (*rec_val)[key.to_string()];
+    }
+    static TLValue dummy;
+    dummy = TLValue();
+    return dummy;
   }
 
   TLValue get(const std::string& key) const {
@@ -914,81 +962,56 @@ using namespace typelang;
 
 
 // Top-Level Function & Constructor Prototypes
-TLValue addTwo(const TLValue& x, const TLValue& y);
-TLValue factorial(const TLValue& n);
-TLValue fibonacci(const TLValue& n);
-TLValue isEven(const TLValue& n);
-TLValue isOdd(const TLValue& n);
-TLValue applyHigherOrder(const TLValue& f, const TLValue& val);
-TLValue computeWhere(const TLValue& x);
 using Color = TLValue;
 TLValue Red();
 TLValue Green();
 TLValue Blue();
-TLValue colorToCode(const TLValue& c);
-using MaybeNum = TLValue;
-TLValue getWithDefault(const TLValue& m, const TLValue& defVal);
+using MaybeNumber = TLValue;
+TLValue Just(const TLValue& val);
+TLValue Nothing();
+using IntList = TLValue;
+TLValue Cons(const TLValue& head, const TLValue& tail);
+TLValue Nil();
+using ExprAST = TLValue;
+TLValue NumLit(const TLValue& val);
+TLValue AddExpr(const TLValue& left, const TLValue& right);
+TLValue evaluateAST(const TLValue& e);
+TLValue sumList(const TLValue& list);
+TLValue addNumbers(const TLValue& a, const TLValue& b);
+TLValue factorial(const TLValue& n);
+TLValue fibonacci(const TLValue& n);
+TLValue isEven(const TLValue& n);
+TLValue isOdd(const TLValue& n);
+TLValue earlyReturnTest(const TLValue& v);
+TLValue divRem(const TLValue& a, const TLValue& b);
+TLValue applyCallback(const TLValue& f, const TLValue& val);
+TLValue makeMultiplier(const TLValue& factor);
+TLValue computeWithWhere(const TLValue& x);
+using PointPair = TLValue;
+TLValue Pair(const TLValue& px, const TLValue& py);
+using Shape = TLValue;
+TLValue Circle(const TLValue& radius);
+TLValue Rect(const TLValue& width, const TLValue& height);
+TLValue classifyShape(const TLValue& s);
+using TaskState = TLValue;
+TLValue Pending();
+TLValue Finished();
+TLValue Cancelled();
 
 // Top-Level Declarations & Modules
-TLValue addTwo(const TLValue& x, const TLValue& y) {
-  return (x + y);
-}
-
-TLValue factorial(const TLValue& n) {
-  return ((n <= TLValue(1)).is_truthy() ? [&]() -> TLValue {
-    return TLValue(1);
-}() : [&]() -> TLValue {
-    return (n * factorial((n - TLValue(1))));
-}());
-}
-
-TLValue fibonacci(const TLValue& n) {
-  return ((n <= TLValue(0)).is_truthy() ? [&]() -> TLValue {
-    return TLValue(0);
-}() : ((n == TLValue(1)).is_truthy() ? [&]() -> TLValue {
-    return TLValue(1);
-}() : [&]() -> TLValue {
-    return (fibonacci((n - TLValue(1))) + fibonacci((n - TLValue(2))));
-}()));
-}
-
-TLValue isEven(const TLValue& n) {
-  return ((n == TLValue(0)).is_truthy() ? [&]() -> TLValue {
-    return TLValue(true);
-}() : [&]() -> TLValue {
-    return isOdd((n - TLValue(1)));
-}());
-}
-
-TLValue isOdd(const TLValue& n) {
-  return ((n == TLValue(0)).is_truthy() ? [&]() -> TLValue {
-    return TLValue(false);
-}() : [&]() -> TLValue {
-    return isEven((n - TLValue(1)));
-}());
-}
-
-TLValue applyHigherOrder(const TLValue& f, const TLValue& val) {
-  return f.call({val});
-}
-
-namespace MathHelper {
-  TLValue cube(const TLValue& x) {
-    return ((x * x) * x);
+namespace MathCore {
+  TLValue square(const TLValue& n) {
+  try {
+    return (n * n);
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
   }
-  namespace NestedGeometry {
-    TLValue area(const TLValue& w, const TLValue& h) {
-      return (w * h);
+  namespace Nested {
+    TLValue greet(const TLValue& name) {
+  try {
+      return concat(TLValue("Greetings, "), name);
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
     }
   }
-}
-
-TLValue computeWhere(const TLValue& x) {
-  TLValue offset = TLValue(100);
-  auto doubleVal = [&](const TLValue& n) -> TLValue {
-    return (n * TLValue(2));
-  };
-  return (doubleVal(x) + offset);
 }
 
 using Color = TLValue;
@@ -996,146 +1019,321 @@ inline TLValue Red() { return TLValue::make_variant("Red", {}); }
 inline TLValue Green() { return TLValue::make_variant("Green", {}); }
 inline TLValue Blue() { return TLValue::make_variant("Blue", {}); }
 
-TLValue colorToCode(const TLValue& c) {
+using MaybeNumber = TLValue;
+inline TLValue Just(const TLValue& val) {
+  return TLValue::make_variant("Just", {val}, {{"val", val}});
+}
+inline TLValue Nothing() { return TLValue::make_variant("Nothing", {}); }
+
+using IntList = TLValue;
+inline TLValue Cons(const TLValue& head, const TLValue& tail) {
+  return TLValue::make_variant("Cons", {head, tail}, {{"head", head}, {"tail", tail}});
+}
+inline TLValue Nil() { return TLValue::make_variant("Nil", {}); }
+
+using ExprAST = TLValue;
+inline TLValue NumLit(const TLValue& val) {
+  return TLValue::make_variant("NumLit", {val}, {{"val", val}});
+}
+inline TLValue AddExpr(const TLValue& left, const TLValue& right) {
+  return TLValue::make_variant("AddExpr", {left, right}, {{"left", left}, {"right", right}});
+}
+
+TLValue evaluateAST(const TLValue& e) {
+  try {
   return [&]() -> TLValue {
-  TLValue _match_val_1 = c;
-  if ((_match_val_1.kind == TLKind::Variant && _match_val_1.var_val && _match_val_1.var_val->tag == "Red")) {
-  
-  return TLValue(1);
+  TLValue _match_val_1 = e;
+  if ((_match_val_1.kind == TLKind::Variant && _match_val_1.var_val && _match_val_1.var_val->tag == "NumLit")) {
+  TLValue n = (_match_val_1.var_val->args.size() > 0 ? _match_val_1.var_val->args[0] : TLValue());
+  return n;
 }
-  if ((_match_val_1.kind == TLKind::Variant && _match_val_1.var_val && _match_val_1.var_val->tag == "Green")) {
-  
-  return TLValue(2);
-}
-  if ((_match_val_1.kind == TLKind::Variant && _match_val_1.var_val && _match_val_1.var_val->tag == "Blue")) {
-  
-  return TLValue(3);
+  if ((_match_val_1.kind == TLKind::Variant && _match_val_1.var_val && _match_val_1.var_val->tag == "AddExpr")) {
+  TLValue l = (_match_val_1.var_val->args.size() > 0 ? _match_val_1.var_val->args[0] : TLValue());
+  TLValue r = (_match_val_1.var_val->args.size() > 1 ? _match_val_1.var_val->args[1] : TLValue());
+  return (evaluateAST(l) + evaluateAST(r));
 }
   return TLValue();
 }();
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
 }
 
-using MaybeNum = TLValue;
-
-TLValue getWithDefault(const TLValue& m, const TLValue& defVal) {
+TLValue sumList(const TLValue& list) {
+  try {
   return [&]() -> TLValue {
-  TLValue _match_val_2 = m;
-  if ((_match_val_2.kind == TLKind::Variant && _match_val_2.var_val && _match_val_2.var_val->tag == "Some")) {
-  TLValue v = (_match_val_2.var_val->args.size() > 0 ? _match_val_2.var_val->args[0] : TLValue());
-  return v;
+  TLValue _match_val_2 = list;
+  if ((_match_val_2.kind == TLKind::Variant && _match_val_2.var_val && _match_val_2.var_val->tag == "Cons")) {
+  TLValue h = (_match_val_2.var_val->args.size() > 0 ? _match_val_2.var_val->args[0] : TLValue());
+  TLValue t = (_match_val_2.var_val->args.size() > 1 ? _match_val_2.var_val->args[1] : TLValue());
+  return (h + sumList(t));
 }
-  if ((_match_val_2.kind == TLKind::Variant && _match_val_2.var_val && _match_val_2.var_val->tag == "None")) {
+  if ((_match_val_2.kind == TLKind::Variant && _match_val_2.var_val && _match_val_2.var_val->tag == "Nil")) {
   
-  return defVal;
+  return TLValue(0);
 }
   return TLValue();
 }();
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
 }
+
+TLValue addNumbers(const TLValue& a, const TLValue& b) {
+  try {
+  return (a + b);
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue factorial(const TLValue& n) {
+  try {
+  return ((n <= TLValue(1)).is_truthy() ? [&]() -> TLValue {
+    return TLValue(1);
+}() : [&]() -> TLValue {
+    return (n * factorial((n - TLValue(1))));
+}());
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue fibonacci(const TLValue& n) {
+  try {
+  return ((n <= TLValue(0)).is_truthy() ? [&]() -> TLValue {
+    return TLValue(0);
+}() : ((n == TLValue(1)).is_truthy() ? [&]() -> TLValue {
+    return TLValue(1);
+}() : [&]() -> TLValue {
+    return (fibonacci((n - TLValue(1))) + fibonacci((n - TLValue(2))));
+}()));
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue isEven(const TLValue& n) {
+  try {
+  return ((n == TLValue(0)).is_truthy() ? [&]() -> TLValue {
+    return TLValue(true);
+}() : [&]() -> TLValue {
+    return isOdd((n - TLValue(1)));
+}());
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue isOdd(const TLValue& n) {
+  try {
+  return ((n == TLValue(0)).is_truthy() ? [&]() -> TLValue {
+    return TLValue(false);
+}() : [&]() -> TLValue {
+    return isEven((n - TLValue(1)));
+}());
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue earlyReturnTest(const TLValue& v) {
+  try {
+  ((v > TLValue(10)).is_truthy() ? [&]() -> TLValue {
+    ([&]() -> TLValue { throw typelang::__TLReturnSignal(TLValue(42)); return TLValue(); })();
+    return TLValue();
+}() : TLValue());
+  ([&]() -> TLValue { throw typelang::__TLReturnSignal(TLValue(0)); return TLValue(); })();
+  return TLValue();
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue divRem(const TLValue& a, const TLValue& b) {
+  try {
+  TLValue q = typelang::Math::floor((a / b));
+  TLValue r = (a % b);
+  return TLValue::make_array({q, r});
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue applyCallback(const TLValue& f, const TLValue& val) {
+  try {
+  return f.call({val});
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue makeMultiplier(const TLValue& factor) {
+  try {
+  return TLValue(TLFunction([&](const std::vector<TLValue>& _args) -> TLValue {
+  TLValue x = (_args.size() > 0 ? _args[0] : TLValue());
+  try {
+    return (x * factor);
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}));
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+TLValue computeWithWhere(const TLValue& x) {
+  TLValue baseOffset = TLValue(10);
+  auto helper = [&](const TLValue& n) -> TLValue {
+  try {
+    return (n * TLValue(2));
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+  };
+  try {
+  return (helper(x) + baseOffset);
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+using PointPair = TLValue;
+inline TLValue Pair(const TLValue& px, const TLValue& py) {
+  return TLValue::make_variant("Pair", {px, py}, {{"px", px}, {"py", py}});
+}
+
+using Shape = TLValue;
+inline TLValue Circle(const TLValue& radius) {
+  return TLValue::make_variant("Circle", {radius}, {{"radius", radius}});
+}
+inline TLValue Rect(const TLValue& width, const TLValue& height) {
+  return TLValue::make_variant("Rect", {width, height}, {{"width", width}, {"height", height}});
+}
+
+TLValue classifyShape(const TLValue& s) {
+  try {
+  return [&]() -> TLValue {
+  TLValue _match_val_8 = s;
+  if ((_match_val_8.kind == TLKind::Variant && _match_val_8.var_val && _match_val_8.var_val->tag == "Circle")) {
+  TLValue r = (_match_val_8.var_val->args.size() > 0 ? _match_val_8.var_val->args[0] : TLValue());
+  if ((r > TLValue(10)).is_truthy()) {
+    return TLValue("Large Circle");
+  }
+}
+  if ((_match_val_8.kind == TLKind::Variant && _match_val_8.var_val && _match_val_8.var_val->tag == "Circle")) {
+  TLValue r = (_match_val_8.var_val->args.size() > 0 ? _match_val_8.var_val->args[0] : TLValue());
+  return TLValue("Small Circle");
+}
+  if ((_match_val_8.kind == TLKind::Variant && _match_val_8.var_val && _match_val_8.var_val->tag == "Rect")) {
+  TLValue w = (_match_val_8.var_val->args.size() > 0 ? _match_val_8.var_val->args[0] : TLValue());
+  TLValue h = (_match_val_8.var_val->args.size() > 1 ? _match_val_8.var_val->args[1] : TLValue());
+  return TLValue("Rectangle");
+}
+  return TLValue();
+}();
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+}
+
+using TaskState = TLValue;
+inline TLValue Pending() { return TLValue::make_variant("Pending", {}); }
+inline TLValue Finished() { return TLValue::make_variant("Finished", {}); }
+inline TLValue Cancelled() { return TLValue::make_variant("Cancelled", {}); }
 
 // Entry Point
 int main(int argc, char** argv) {
   // Initialize runtime environment
   (void)argc; (void)argv;
   try {
-println(TLValue("=== TYPELANG COMPREHENSIVE COMPILER VALIDATION SUITE ==="));
+println(TLValue("=== TYPELANG NATIVE BOOTSTRAP SUITE ==="));
 println(TLValue("[TEST 1: PRIMITIVES & ARITHMETIC]"));
-TLValue intVal = TLValue(42);
-TLValue floatVal = TLValue(3.14159);
-TLValue negVal = (-TLValue(15));
-println(concat(TLValue("int: "), to_string(intVal)));
-println(concat(TLValue("float: "), to_string(floatVal)));
-println(concat(TLValue("neg: "), to_string(negVal)));
-TLValue arithAdd = (intVal + TLValue(8));
-TLValue arithSub = (intVal - TLValue(12));
-TLValue arithMul = (intVal * TLValue(2));
-TLValue arithDiv = (TLValue(84) / TLValue(2));
-TLValue arithMod = (TLValue(17) % TLValue(5));
-TLValue precedence = (((TLValue(2) + TLValue(3)) * TLValue(4)) - (TLValue(10) / TLValue(2)));
-println(concat(TLValue("arith_add: "), to_string(arithAdd)));
-println(concat(TLValue("arith_sub: "), to_string(arithSub)));
-println(concat(TLValue("arith_mul: "), to_string(arithMul)));
-println(concat(TLValue("arith_div: "), to_string(arithDiv)));
-println(concat(TLValue("arith_mod: "), to_string(arithMod)));
+TLValue i = TLValue(42);
+TLValue f = TLValue(3.14159);
+TLValue neg = (-TLValue(15));
+println(concat(TLValue("int: "), to_string(i)));
+println(concat(TLValue("float: "), to_string(f)));
+println(concat(TLValue("neg: "), to_string(neg)));
+println(concat(TLValue("bool: "), concat(to_string(TLValue(true)), concat(TLValue(", "), to_string(TLValue(false))))));
+TLValue arith = (((TLValue(10) + TLValue(5)) * TLValue(2)) - (TLValue(9) / TLValue(2)));
+println(concat(TLValue("arith: "), to_string(arith)));
+TLValue modVal = (TLValue(17) % TLValue(5));
+println(concat(TLValue("mod: "), to_string(modVal)));
+TLValue precedence = (TLValue(2) + (TLValue(3) * TLValue(4)));
 println(concat(TLValue("precedence: "), to_string(precedence)));
-println(TLValue("[TEST 2: BOOLEANS & LOGIC]"));
-TLValue boolTrue = TLValue(true);
-TLValue boolFalse = TLValue(false);
-println(concat(TLValue("true_val: "), to_string(boolTrue)));
-println(concat(TLValue("false_val: "), to_string(boolFalse)));
-println(concat(TLValue("op_and: "), to_string(TLValue(boolTrue.is_truthy() && boolFalse.is_truthy()))));
-println(concat(TLValue("op_or: "), to_string(TLValue(boolTrue.is_truthy() || boolFalse.is_truthy()))));
-println(concat(TLValue("op_not: "), to_string((!boolFalse))));
-println(concat(TLValue("cmp_eq: "), to_string((intVal == TLValue(42)))));
-println(concat(TLValue("cmp_ne: "), to_string((intVal != TLValue(42)))));
-println(concat(TLValue("cmp_lt: "), to_string((TLValue(10) < TLValue(20)))));
-println(concat(TLValue("cmp_le: "), to_string((TLValue(20) <= TLValue(20)))));
-println(concat(TLValue("cmp_gt: "), to_string((TLValue(30) > TLValue(20)))));
-println(concat(TLValue("cmp_ge: "), to_string((TLValue(30) >= TLValue(30)))));
-println(TLValue("[TEST 3: STRINGS & CONCATENATION]"));
-TLValue hello = TLValue("Hello");
-TLValue world = TLValue("TypeLang");
-TLValue joined = concat(concat(hello, TLValue(", ")), concat(world, TLValue("!")));
-println(concat(TLValue("greeting: "), joined));
-println(TLValue("[TEST 4: VARIABLES & MUTABILITY]"));
-TLValue acc = TLValue(10);
-(acc = (acc + TLValue(15)));
-(acc += TLValue(25));
-(acc -= TLValue(10));
-(acc *= TLValue(2));
-(acc /= TLValue(4));
-println(concat(TLValue("mut_acc: "), to_string(acc)));
-TLValue blockResult = [&]() -> TLValue {
-  TLValue inner1 = TLValue(7);
-  TLValue inner2 = TLValue(8);
-  return (inner1 * inner2);
+println(TLValue("[TEST 2: STRINGS & CONCATENATION]"));
+println(TLValue("escaped: Line 1\\nLine 2\\tTabbed"));
+TLValue greeting = concat(TLValue("Hello, "), TLValue("TypeLang Native World!"));
+println(concat(TLValue("concat: "), greeting));
+println(TLValue("[TEST 3: VARIABLES & MUTABILITY]"));
+TLValue mutVal = TLValue(50);
+(mutVal = TLValue(100));
+(mutVal += TLValue(50));
+println(concat(TLValue("reassign: "), to_string(mutVal)));
+TLValue outerX = TLValue(100);
+TLValue innerShadow = [&]() -> TLValue {
+  TLValue outerX = TLValue(200);
+  return outerX;
 }();
-println(concat(TLValue("block_result: "), to_string(blockResult)));
-println(TLValue("[TEST 5: FUNCTIONS & RECURSION]"));
-println(concat(TLValue("addTwo(18, 24): "), to_string(addTwo(TLValue(18), TLValue(24)))));
+println(concat(TLValue("shadowing: inner="), concat(to_string(innerShadow), concat(TLValue(", outer="), to_string(outerX)))));
+TLValue blockVal = [&]() -> TLValue {
+  TLValue b1 = TLValue(5);
+  TLValue b2 = TLValue(12);
+  return ((b1 * b1) + (b2 * b2));
+}();
+println(concat(TLValue("block_expr: "), to_string(blockVal)));
+println(TLValue("[TEST 4: FUNCTIONS & RECURSION]"));
+println(concat(TLValue("add: "), to_string(addNumbers(TLValue(20), TLValue(35)))));
 println(concat(TLValue("factorial(6): "), to_string(factorial(TLValue(6)))));
-println(concat(TLValue("fibonacci(8): "), to_string(fibonacci(TLValue(8)))));
-println(concat(TLValue("isEven(10): "), to_string(isEven(TLValue(10)))));
-println(concat(TLValue("isOdd(10): "), to_string(isOdd(TLValue(10)))));
-println(TLValue("[TEST 6: FIRST-CLASS FUNCTIONS]"));
-TLValue squareLambda = TLValue(TLFunction([&](const std::vector<TLValue>& _args) -> TLValue {
-  TLValue n = (_args.size() > 0 ? _args[0] : TLValue());
-    return (n * n);
+println(concat(TLValue("fibonacci(10): "), to_string(fibonacci(TLValue(10)))));
+println(concat(TLValue("mutual_even(8): "), to_string(isEven(TLValue(8)))));
+println(concat(TLValue("mutual_odd(8): "), to_string(isOdd(TLValue(8)))));
+println(concat(TLValue("early_return: "), to_string(earlyReturnTest(TLValue(15)))));
+println(TLValue("[TEST 5: FIRST-CLASS FUNCTIONS & CLOSURES]"));
+TLValue squareFn = TLValue(TLFunction([&](const std::vector<TLValue>& _args) -> TLValue {
+  TLValue x = (_args.size() > 0 ? _args[0] : TLValue());
+  try {
+  return (x * x);
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
 }));
-println(concat(TLValue("lambda_square(9): "), to_string(squareLambda.call({TLValue(9)}))));
-println(concat(TLValue("apply_higher_order: "), to_string(applyHigherOrder(squareLambda, TLValue(12)))));
-println(TLValue("[TEST 7: CONTROL FLOW]"));
-TLValue ternaryVal = ((intVal > TLValue(40)).is_truthy() ? TLValue("above_40") : TLValue("below_or_equal"));
-println(concat(TLValue("ternary: "), ternaryVal));
-TLValue loopSum = TLValue(0);
-TLValue counter = TLValue(1);
-try { while ((counter <= TLValue(5)).is_truthy()) { try {
-  (loopSum += counter);
-  (counter += TLValue(1));
+println(concat(TLValue("lambda_square: "), to_string(squareFn.call({TLValue(8)}))));
+TLValue applied = applyCallback(TLValue(TLFunction([&](const std::vector<TLValue>& _args) -> TLValue {
+  TLValue x = (_args.size() > 0 ? _args[0] : TLValue());
+  try {
+  return (x + TLValue(1));
+  } catch (const typelang::__TLReturnSignal& __sig) { return __sig.value; }
+})), TLValue(20));
+println(concat(TLValue("higher_order_apply: "), to_string(applied)));
+TLValue timesThree = makeMultiplier(TLValue(3));
+println(concat(TLValue("closure_adder: "), to_string(timesThree.call({TLValue(15)}))));
+println(TLValue("[TEST 6: CONTROL FLOW & LOOPS]"));
+TLValue condVal = TLValue(10);
+TLValue ifResult = ((condVal > TLValue(0)).is_truthy() ? [&]() -> TLValue {
+  return TLValue("positive");
+}() : [&]() -> TLValue {
+  return TLValue("non-positive");
+}());
+println(concat(TLValue("if_branch: "), ifResult));
+TLValue ternResult = ((condVal >= TLValue(10)).is_truthy() ? TLValue("pass") : TLValue("fail"));
+println(concat(TLValue("ternary: "), ternResult));
+TLValue whileIdx = TLValue(1);
+TLValue whileSum = TLValue(0);
+try { while ((whileIdx <= TLValue(5)).is_truthy()) { try {
+  (whileSum += whileIdx);
+  (whileIdx += TLValue(1));
 } catch(const typelang::__TLContinueSignal&) { continue; } } } catch(const typelang::__TLBreakSignal&) {}
-println(concat(TLValue("while_sum: "), to_string(loopSum)));
-TLValue breakSum = TLValue(0);
-TLValue bIndex = TLValue(0);
-try { while ((bIndex < TLValue(20)).is_truthy()) { try {
-  (bIndex += TLValue(1));
-  ((bIndex > TLValue(6)).is_truthy() ? [&]() -> TLValue {
-    ([]() -> TLValue { throw typelang::__TLBreakSignal(); return TLValue(); })();
-    return TLValue();
-}() : TLValue());
-  ((bIndex == TLValue(3)).is_truthy() ? [&]() -> TLValue {
+println(concat(TLValue("while_loop: sum="), to_string(whileSum)));
+TLValue loopCtr = TLValue(0);
+TLValue loopAcc = TLValue(0);
+try { while ((loopCtr < TLValue(10)).is_truthy()) { try {
+  (loopCtr += TLValue(1));
+  ((loopCtr == TLValue(2)).is_truthy() ? [&]() -> TLValue {
     ([]() -> TLValue { throw typelang::__TLContinueSignal(); return TLValue(); })();
     return TLValue();
 }() : TLValue());
-  (breakSum += bIndex);
+  ((loopCtr > TLValue(7)).is_truthy() ? [&]() -> TLValue {
+    ([]() -> TLValue { throw typelang::__TLBreakSignal(); return TLValue(); })();
+    return TLValue();
+}() : TLValue());
+  (loopAcc += loopCtr);
 } catch(const typelang::__TLContinueSignal&) { continue; } } } catch(const typelang::__TLBreakSignal&) {}
-println(concat(TLValue("break_continue_sum: "), to_string(breakSum)));
-TLValue switchResult = [&]() -> TLValue {
-  TLValue _discr = TLValue(3);
+println(concat(TLValue("while_break_continue: "), to_string(loopAcc)));
+TLValue forSum = TLValue(0);
+try { for (TLValue fi = TLValue(0); (fi < TLValue(5)).is_truthy(); (fi += TLValue(1))) { try {
+  (forSum += (fi * TLValue(3)));
+} catch(const typelang::__TLContinueSignal&) { continue; } } } catch(const typelang::__TLBreakSignal&) {}
+println(concat(TLValue("for_loop: total="), to_string(forSum)));
+TLValue gridCount = TLValue(0);
+try { for (TLValue r = TLValue(0); (r < TLValue(3)).is_truthy(); (r += TLValue(1))) { try {
+  [&]() -> TLValue {
+  try { for (TLValue c = TLValue(0); (c < TLValue(3)).is_truthy(); (c += TLValue(1))) { try {
+    (gridCount += TLValue(1));
+  } catch(const typelang::__TLContinueSignal&) { continue; } } } catch(const typelang::__TLBreakSignal&) {}
+  return TLValue();
+}();
+} catch(const typelang::__TLContinueSignal&) { continue; } } } catch(const typelang::__TLBreakSignal&) {}
+println(concat(TLValue("nested_loops: cells="), to_string(gridCount)));
+TLValue dayCode = TLValue(3);
+TLValue dayName = [&]() -> TLValue {
+  TLValue _discr = dayCode;
   bool _matched = false, _fallthrough = false;
   if (_fallthrough || ((_discr == TLValue(1)).bool_val)) {
     _matched = true;
     _fallthrough = false;
     try {
-      return TLValue("First");
+      return TLValue("Monday");
     } catch (const typelang::__TLContinueSignal&) { _fallthrough = true; }
     catch (const typelang::__TLBreakSignal&) { return TLValue(); }
   }
@@ -1143,7 +1341,7 @@ TLValue switchResult = [&]() -> TLValue {
     _matched = true;
     _fallthrough = false;
     try {
-      return TLValue("Second");
+      return TLValue("Tuesday");
     } catch (const typelang::__TLContinueSignal&) { _fallthrough = true; }
     catch (const typelang::__TLBreakSignal&) { return TLValue(); }
   }
@@ -1151,7 +1349,7 @@ TLValue switchResult = [&]() -> TLValue {
     _matched = true;
     _fallthrough = false;
     try {
-      return TLValue("Third");
+      return TLValue("Wednesday");
     } catch (const typelang::__TLContinueSignal&) { _fallthrough = true; }
     catch (const typelang::__TLBreakSignal&) { return TLValue(); }
   }
@@ -1160,23 +1358,155 @@ TLValue switchResult = [&]() -> TLValue {
   }
   return TLValue();
 }();
-println(concat(TLValue("switch_result: "), switchResult));
-println(TLValue("[TEST 8: MODULES & NAMESPACES]"));
-println(concat(TLValue("module_cube(4): "), to_string(MathHelper::cube(TLValue(4)))));
-println(concat(TLValue("nested_area(5, 7): "), to_string(MathHelper::NestedGeometry::area(TLValue(5), TLValue(7)))));
-println(TLValue("[TEST 9: WHERE CLAUSES]"));
-println(concat(TLValue("where_result(25): "), to_string(computeWhere(TLValue(25)))));
-println(TLValue("[TEST 10: MATH LIBRARY]"));
-println(concat(TLValue("sqrt(64): "), to_string(typelang::Math::sqrt(TLValue(64)))));
-println(concat(TLValue("floor(9.87): "), to_string(typelang::Math::floor(TLValue(9.87)))));
-println(concat(TLValue("abs(-42.5): "), to_string(typelang::Math::abs((-TLValue(42.5))))));
-println(TLValue("[TEST 11: ADTS & PATTERN MATCHING]"));
-println(concat(TLValue("color_red: "), to_string(colorToCode(Red()))));
-println(concat(TLValue("color_green: "), to_string(colorToCode(Green()))));
-println(concat(TLValue("color_blue: "), to_string(colorToCode(Blue()))));
-println(concat(TLValue("maybe_some: "), to_string(getWithDefault(Some(TLValue(88)), TLValue(0)))));
-println(concat(TLValue("maybe_none: "), to_string(getWithDefault(None(), TLValue(99)))));
-println(TLValue("=== ALL VALIDATION TESTS COMPLETED SUCCESSFULLY ==="));
+println(concat(TLValue("switch_case: "), dayName));
+println(TLValue("[TEST 7: STRUCTURAL RECORDS]"));
+TLValue pt = TLValue::make_record({{"x", TLValue(10)}, {"y", TLValue(20)}});
+println(concat(TLValue("point: x="), concat(to_string(pt.get("x")), concat(TLValue(", y="), to_string(pt.get("y"))))));
+TLValue cfg = TLValue::make_record({{"server", TLValue::make_record({{"host", TLValue("localhost")}, {"port", TLValue(8080)}})}});
+println(concat(TLValue("nested_record: host="), concat(cfg.get("server").get("host"), concat(TLValue(", port="), to_string(cfg.get("server").get("port"))))));
+TLValue origPt = TLValue::make_record({{"x", TLValue(10)}, {"y", TLValue(20)}});
+TLValue modPt = [&]() -> TLValue {
+  TLValue _b = origPt;
+  if (_b.kind != TLKind::Record || !_b.rec_val) _b.rec_val = std::make_shared<TLRecord>();
+  TLRecord _r = *_b.rec_val;
+  for (const auto& kv : std::map<std::string, TLValue>{{"y", TLValue(99)}}) { _r[kv.first] = kv.second; }
+  return TLValue(_r);
+}();
+println(concat(TLValue("record_update: old="), concat(to_string(origPt.get("y")), concat(TLValue(", updated="), to_string(modPt.get("y"))))));
+println(TLValue("[TEST 8: TUPLES & ARRAYS]"));
+TLValue pairTup = TLValue::make_array({TLValue(100), TLValue("Centum")});
+println(concat(TLValue("tuple_items: first="), concat(to_string(pairTup[TLValue(0)]), concat(TLValue(", second="), pairTup[TLValue(1)]))));
+TLValue dr = divRem(TLValue(17), TLValue(5));
+println(concat(TLValue("tuple_return: quot="), concat(to_string(dr[TLValue(0)]), concat(TLValue(", rem="), to_string(dr[TLValue(1)])))));
+TLValue sampleArr = TLValue::make_array({TLValue(10), TLValue(20), TLValue(30), TLValue(40)});
+println(concat(TLValue("array_index: "), to_string(sampleArr[TLValue(2)])));
+println(TLValue("[TEST 9: ALGEBRAIC DATA TYPES & GADTS]"));
+TLValue col = Green();
+TLValue colStr = [&]() -> TLValue {
+  TLValue _match_val_3 = col;
+  if ((_match_val_3.kind == TLKind::Variant && _match_val_3.var_val && _match_val_3.var_val->tag == "Red")) {
+  
+  return TLValue("Red");
+}
+  if ((_match_val_3.kind == TLKind::Variant && _match_val_3.var_val && _match_val_3.var_val->tag == "Green")) {
+  
+  return TLValue("Green");
+}
+  if ((_match_val_3.kind == TLKind::Variant && _match_val_3.var_val && _match_val_3.var_val->tag == "Blue")) {
+  
+  return TLValue("Blue");
+}
+  return TLValue();
+}();
+println(concat(TLValue("enum: "), colStr));
+TLValue mb = Just(TLValue(42));
+TLValue mbVal = [&]() -> TLValue {
+  TLValue _match_val_4 = mb;
+  if ((_match_val_4.kind == TLKind::Variant && _match_val_4.var_val && _match_val_4.var_val->tag == "Just")) {
+  TLValue v = (_match_val_4.var_val->args.size() > 0 ? _match_val_4.var_val->args[0] : TLValue());
+  return v;
+}
+  if ((_match_val_4.kind == TLKind::Variant && _match_val_4.var_val && _match_val_4.var_val->tag == "Nothing")) {
+  
+  return TLValue(0);
+}
+  return TLValue();
+}();
+println(concat(TLValue("maybe: "), to_string(mbVal)));
+TLValue intList = Cons(TLValue(10), Cons(TLValue(20), Cons(TLValue(30), Nil())));
+println(concat(TLValue("list_sum: "), to_string(sumList(intList))));
+TLValue astTree = AddExpr(NumLit(TLValue(10)), AddExpr(NumLit(TLValue(7)), NumLit(TLValue(8))));
+println(concat(TLValue("gadt_eval: "), to_string(evaluateAST(astTree))));
+println(TLValue("[TEST 10: PATTERN MATCHING]"));
+TLValue matchNum = TLValue(2);
+TLValue numWord = [&]() -> TLValue {
+  TLValue _match_val_5 = matchNum;
+  if ((_match_val_5 == TLValue(1)).bool_val) {
+  
+  return TLValue("One");
+}
+  if ((_match_val_5 == TLValue(2)).bool_val) {
+  
+  return TLValue("Two");
+}
+  if (true) {
+  
+  return TLValue("Other");
+}
+  return TLValue();
+}();
+println(concat(TLValue("literal_match: "), numWord));
+TLValue unwrapped = [&]() -> TLValue {
+  TLValue _match_val_6 = Just(TLValue(99));
+  if ((_match_val_6.kind == TLKind::Variant && _match_val_6.var_val && _match_val_6.var_val->tag == "Just")) {
+  TLValue n = (_match_val_6.var_val->args.size() > 0 ? _match_val_6.var_val->args[0] : TLValue());
+  return n;
+}
+  if ((_match_val_6.kind == TLKind::Variant && _match_val_6.var_val && _match_val_6.var_val->tag == "Nothing")) {
+  
+  return (-TLValue(1));
+}
+  return TLValue();
+}();
+println(concat(TLValue("constructor_unwrap: "), to_string(unwrapped)));
+TLValue pp = Pair(TLValue(15), TLValue(25));
+TLValue ppSum = [&]() -> TLValue {
+  TLValue _match_val_7 = pp;
+  if ((_match_val_7.kind == TLKind::Variant && _match_val_7.var_val && _match_val_7.var_val->tag == "Pair")) {
+  TLValue a = (_match_val_7.var_val->args.size() > 0 ? _match_val_7.var_val->args[0] : TLValue());
+  TLValue b = (_match_val_7.var_val->args.size() > 1 ? _match_val_7.var_val->args[1] : TLValue());
+  return (a + b);
+}
+  return TLValue();
+}();
+println(concat(TLValue("multi_arg_ctor: "), to_string(ppSum)));
+println(concat(TLValue("guard_match: "), classifyShape(Circle(TLValue(15)))));
+TLValue coords = TLValue::make_array({TLValue(3), TLValue(4)});
+TLValue pythagoras = [&]() -> TLValue {
+  TLValue _match_val_9 = coords;
+  if ((_match_val_9.kind == TLKind::Array && _match_val_9.arr_val && _match_val_9.arr_val->size() >= 2 && true && true)) {
+  TLValue x = _match_val_9[TLValue(0)];
+  TLValue y = _match_val_9[TLValue(1)];
+  return ((x * x) + (y * y));
+}
+  return TLValue();
+}();
+println(concat(TLValue("tuple_pattern: "), to_string(pythagoras)));
+TLValue userRec = TLValue::make_record({{"name", TLValue("Bob")}, {"role", TLValue("Admin")}});
+TLValue userGreeting = [&]() -> TLValue {
+  TLValue _match_val_10 = userRec;
+  if ((_match_val_10.kind == TLKind::Record && _match_val_10.rec_val && (_match_val_10.get("name").kind != TLKind::Null) && (_match_val_10.get("role").kind != TLKind::Null))) {
+  TLValue name = _match_val_10.get("name");
+  TLValue role = _match_val_10.get("role");
+  return concat(name, concat(TLValue(" ("), concat(role, TLValue(")"))));
+}
+  return TLValue();
+}();
+println(concat(TLValue("record_pattern: "), userGreeting));
+TLValue taskSt = Finished();
+TLValue taskDone = [&]() -> TLValue {
+  TLValue _match_val_11 = taskSt;
+  if ((_match_val_11.kind == TLKind::Variant && _match_val_11.var_val && _match_val_11.var_val->tag == "Finished")) {
+  
+  return TLValue("finished");
+}
+  if (true) {
+  
+  return TLValue("other");
+}
+  return TLValue();
+}();
+println(concat(TLValue("fallback_pattern: "), taskDone));
+println(TLValue("[TEST 11: MODULES & NAMESPACES]"));
+println(concat(TLValue("module_call: "), to_string(MathCore::square(TLValue(7)))));
+println(concat(TLValue("nested_module: "), MathCore::Nested::greet(TLValue("Commander"))));
+println(TLValue("[TEST 12: MONADIC WHERE CLAUSES]"));
+println(concat(TLValue("where_computation: "), to_string(computeWithWhere(TLValue(15)))));
+println(TLValue("[TEST 13: MATH STANDARD LIBRARY]"));
+println(concat(TLValue("sqrt: "), to_string(typelang::Math::sqrt(TLValue(49)))));
+println(concat(TLValue("floor: "), to_string(typelang::Math::floor(TLValue(9.85)))));
+println(concat(TLValue("abs: "), to_string(typelang::Math::abs((-TLValue(12.5))))));
+println(TLValue("=== ALL TESTS PASSED SUCCESSFULLY ==="));
   } catch (const typelang::__TLReturnSignal& r) {
     (void)r;
     return 0;

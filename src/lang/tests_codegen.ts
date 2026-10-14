@@ -318,7 +318,7 @@ export const CODEGEN_TEST_CASES: CodegenTestCase[] = [
       execute: true
     },
     expectedC: {
-      expectedSnippets: ['val +=', 'val -=', 'val *=', 'val /=']
+      expectedSnippets: ['tl_add(', 'tl_sub(', 'tl_mul(', 'tl_div(']
     },
     expectedCpp: {
       expectedSnippets: ['val +=', 'val -=', 'val *=', 'val /=']

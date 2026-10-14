@@ -992,7 +992,8 @@ export class Parser {
       this.match('SYMBOL', '+=') ||
       this.match('SYMBOL', '-=') ||
       this.match('SYMBOL', '*=') ||
-      this.match('SYMBOL', '/=')
+      this.match('SYMBOL', '/=') ||
+      this.match('SYMBOL', '%=')
     ) {
       const op = this.previous().value as any;
       const value = this.parseAssignment();
