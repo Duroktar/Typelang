@@ -35,6 +35,7 @@ import { runCompilerTestSuite, TestResult } from '../lang/tests';
 import { JSSandbox, JSRuntimeResult } from '../lang/js_runtime';
 import { LLVMInterpreter, LLVMExecutionResult } from '../lang/llvm_interpreter';
 import { useWasmCompiler } from '../lang/wasmCompiler';
+import { WasmCodeGenerator, type WasmExecutionResult } from '../lang/codegen_wasm';
 import { LiveAppPreview } from './LiveAppPreview';
 import { FFIPanel } from './FFIPanel';
 import { TypeExplorer } from './TypeExplorer';
@@ -54,6 +55,7 @@ interface OutputPanelProps {
   nodeCode?: string;
   cCode?: string;
   cppCode?: string;
+  watCode?: string;
   executionTimeMs: number | null;
   hasError: boolean;
   onClearStdout: () => void;
@@ -78,6 +80,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   nodeCode = '',
   cCode = '',
   cppCode = '',
+  watCode = '',
   executionTimeMs,
   hasError,
   onClearStdout,
@@ -100,13 +103,15 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
     }
     setInternalActiveTab(tab);
   };
-  const [codegenSubTab, setCodegenSubTab] = useState<'llvm' | 'js' | 'node' | 'cpp' | 'c'>('cpp');
+  const [codegenSubTab, setCodegenSubTab] = useState<'llvm' | 'js' | 'node' | 'cpp' | 'c' | 'wasm'>('cpp');
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [showStdLibModules, setShowStdLibModules] = useState<boolean>(false);
   const [sandboxResult, setSandboxResult] = useState<JSRuntimeResult | null>(null);
   const [isRunningSandbox, setIsRunningSandbox] = useState<boolean>(false);
   const [llvmResult, setLlvmResult] = useState<LLVMExecutionResult | null>(null);
   const [isRunningLLVM, setIsRunningLLVM] = useState<boolean>(false);
+  const [wasmResult, setWasmResult] = useState<WasmExecutionResult | null>(null);
+  const [isRunningWasm, setIsRunningWasm] = useState<boolean>(false);
   const [consoleFilter, setConsoleFilter] = useState<string>('');
   const [isWordWrapEnabled, setIsWordWrapEnabled] = useState<boolean>(false);
 
@@ -119,6 +124,52 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
     } catch (e) {
       console.error('Failed to compile WASM binary', e);
     }
+  };
+
+  const handleRunWasm = async () => {
+    setIsRunningWasm(true);
+    try {
+      const wasmGen = new WasmCodeGenerator();
+      const res = await wasmGen.executeWasm(watCode);
+      setWasmResult(res);
+    } catch (err: any) {
+      setWasmResult({
+        stdout: [],
+        exitCode: 1,
+        executionTimeMs: 0,
+        watSource: watCode,
+        binarySizeBytes: 0,
+        error: String(err.message || err)
+      });
+    } finally {
+      setIsRunningWasm(false);
+    }
+  };
+
+  const handleDownloadWasmBinary = async () => {
+    try {
+      const wasmGen = new WasmCodeGenerator();
+      const binary = await wasmGen.compileWatToWasm(watCode);
+      const blob = new Blob([binary], { type: 'application/wasm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'program.wasm';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      console.error('Failed to compile and download WASM binary', e);
+    }
+  };
+
+  const handleDownloadWat = () => {
+    const blob = new Blob([watCode], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'program.wat';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleRunLLVM = () => {
@@ -1063,6 +1114,19 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 >
                   LLVM IR Target
                 </button>
+                <button
+                  onClick={() => {
+                    setCodegenSubTab('wasm');
+                    setSandboxResult(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                    codegenSubTab === 'wasm'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  WebAssembly (WASM / WAT)
+                </button>
               </div>
 
               <div className="flex items-center space-x-2">
@@ -1139,6 +1203,34 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                     <Download className="w-3.5 h-3.5" />
                     <span>Download .cpp</span>
                   </button>
+                ) : codegenSubTab === 'wasm' ? (
+                  <>
+                    <button
+                      onClick={handleRunWasm}
+                      disabled={isRunningWasm}
+                      className="flex items-center space-x-1 px-3 py-1 text-xs rounded bg-amber-600 hover:bg-amber-500 text-white transition cursor-pointer shadow-sm disabled:opacity-50 font-medium"
+                      title="Execute WebAssembly module with TypeLang Host Runtime"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>{isRunningWasm ? 'Executing...' : 'Run WASM'}</span>
+                    </button>
+                    <button
+                      onClick={handleDownloadWasmBinary}
+                      className="flex items-center space-x-1 px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white transition cursor-pointer border border-amber-500/30 font-medium"
+                      title="Compile and Download .wasm binary"
+                    >
+                      <Binary className="w-3.5 h-3.5" />
+                      <span>Download .wasm</span>
+                    </button>
+                    <button
+                      onClick={handleDownloadWat}
+                      className="flex items-center space-x-1 px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer border border-slate-700 font-medium"
+                      title="Download WebAssembly Text format source (.wat)"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download .wat</span>
+                    </button>
+                  </>
                 ) : (
                   <>
                     <button
@@ -1171,6 +1263,8 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                         ? cCode
                         : codegenSubTab === 'cpp'
                         ? (cppCode || cCode)
+                        : codegenSubTab === 'wasm'
+                        ? watCode
                         : jsCode;
                     handleCopyCodegen(currentCode, codegenSubTab);
                   }}
@@ -1261,6 +1355,41 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
               </div>
             )}
 
+            {/* WASM Execution Result Card */}
+            {codegenSubTab === 'wasm' && wasmResult && (
+              <div className="bg-slate-950 p-3 rounded-lg border border-amber-500/40 space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between text-[11px] pb-1 border-b border-slate-800">
+                  <div className="flex items-center space-x-1.5 text-amber-300 font-semibold">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>WebAssembly (WASM) Runtime Output (EXIT {wasmResult.exitCode})</span>
+                  </div>
+                  <span className="text-slate-400 text-[10px]">
+                    ⏱ {wasmResult.executionTimeMs.toFixed(2)} ms · Binary: {wasmResult.binarySizeBytes} bytes
+                  </span>
+                </div>
+
+                {wasmResult.stdout && wasmResult.stdout.length > 0 ? (
+                  <div className="space-y-0.5 text-slate-200 text-[11px] max-h-36 overflow-y-auto">
+                    {wasmResult.stdout.map((line, idx) => (
+                      <div key={idx} className="leading-relaxed">
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-slate-500 italic text-[11px]">
+                    WASM module executed cleanly with no stdout output.
+                  </div>
+                )}
+
+                {wasmResult.error && (
+                  <div className="p-2 rounded bg-rose-950/60 border border-rose-800/80 text-rose-300 text-[11px]">
+                    {wasmResult.error}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="text-[11px] text-slate-400 flex items-center justify-between bg-slate-950/80 px-3 py-1.5 rounded border border-slate-800/80">
               <span>
                 {codegenSubTab === 'llvm'
@@ -1271,6 +1400,8 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                   ? 'Target: ANSI C / C11 Native Standalone | Portable C Target with Struct Tagged Unions'
                   : codegenSubTab === 'cpp'
                   ? 'Target: C++17 / C++20 Native Standalone | High-Performance STL, Algebraic Types & Zero Overhead'
+                  : codegenSubTab === 'wasm'
+                  ? 'Target: WebAssembly (WASM / WAT) | Universal Portable Bytecode, Linear Memory & Host FFI'
                   : 'Target: Browser ES2022 | Virtual DOM Hyperscript, DOM Mount & Web Prelude'}
               </span>
               <span className="font-mono text-slate-500 text-[10px]">
@@ -1282,12 +1413,14 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                   ? `${cCode.split('\n').length} lines`
                   : codegenSubTab === 'cpp'
                   ? `${(cppCode || cCode).split('\n').length} lines`
+                  : codegenSubTab === 'wasm'
+                  ? `${watCode.split('\n').length} lines`
                   : `${jsCode.split('\n').length} lines`}
               </span>
             </div>
 
             <pre className={`bg-slate-950 p-4 rounded-lg border border-slate-800 ${
-              codegenSubTab === 'c' ? 'text-blue-300' : codegenSubTab === 'cpp' ? 'text-sky-300' : 'text-purple-300'
+              codegenSubTab === 'c' ? 'text-blue-300' : codegenSubTab === 'cpp' ? 'text-sky-300' : codegenSubTab === 'wasm' ? 'text-amber-300' : 'text-purple-300'
             } text-xs overflow-x-auto leading-relaxed max-h-[500px] font-mono ${
               isWordWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
             }`}>
@@ -1299,6 +1432,8 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                 ? cCode
                 : codegenSubTab === 'cpp'
                 ? (cppCode || cCode)
+                : codegenSubTab === 'wasm'
+                ? watCode
                 : jsCode}
             </pre>
           </div>

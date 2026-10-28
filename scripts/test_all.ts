@@ -116,8 +116,15 @@ if (allPassed) {
   console.log("✅ All examples generated valid LLVM SSA IR successfully!");
 }
 
+console.log("\nRunning WebAssembly (WASM / WAT) Target Tests...");
+const { runWasmTests } = await import('./test_wasm');
+const wasmPassed = await runWasmTests();
+if (!wasmPassed) {
+  allPassed = false;
+}
+
 if (allPassed) {
-  console.log("\n✅ All compiler, type-check, and LLVM codegen tests passed!");
+  console.log("\n🎉 All compiler, type-check, LLVM codegen, and WebAssembly tests passed!");
   process.exit(0);
 } else {
   console.log("\n❌ Some tests failed.");

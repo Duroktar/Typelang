@@ -29,6 +29,7 @@ export interface WorkerResponse {
   nodeCode?: string;
   cCode?: string;
   cppCode?: string;
+  watCode?: string;
   formattedCode?: string;
   error?: string;
 }
@@ -95,6 +96,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     const nodeCode = codegen.generateNode(ast);
     const cCode = codegen.generateC(ast);
     const cppCode = codegen.generateCpp(ast);
+    const watCode = codegen.generateWasmWAT(ast);
 
     if (req.action === 'typecheck') {
       const response: WorkerResponse = {
@@ -107,7 +109,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         jsCode,
         nodeCode,
         cCode,
-        cppCode
+        cppCode,
+        watCode
       };
       self.postMessage(response);
       return;
@@ -128,7 +131,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           jsCode,
           nodeCode,
           cCode,
-          cppCode
+          cppCode,
+          watCode
         };
         self.postMessage(response);
         return;
@@ -149,7 +153,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         jsCode,
         nodeCode,
         cCode,
-        cppCode
+        cppCode,
+        watCode
       };
       self.postMessage(response);
       return;

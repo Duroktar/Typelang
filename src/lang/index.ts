@@ -77,6 +77,7 @@ export type { DocTag, ParsedDocComment } from './docComments';
 export { LLVMIRGenerator } from './codegen_llvm';
 export { CCodeGenerator } from './codegen_c';
 export { JSCodeGenerator } from './codegen_js';
+export { WasmCodeGenerator } from './codegen_wasm';
 export { LLVMGenerator } from './codegen';
 export {
   CODEGEN_TEST_CASES,

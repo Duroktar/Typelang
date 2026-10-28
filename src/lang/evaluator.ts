@@ -92,6 +92,39 @@ export function createInitialRuntimeEnv(stdout: string[]): RuntimeEnv {
   env.vars.set('parse_float', (s: any) => parseFloat(String(s)));
   env.vars.set('time_now', () => Date.now());
 
+  env.vars.set('get_cli_arg', (idx: any) => {
+    const i = Math.floor(Number(idx));
+    if (typeof process !== 'undefined' && process.argv) {
+      if (i >= 0 && i < process.argv.length) {
+        return process.argv[i];
+      }
+    }
+    return '';
+  });
+
+  env.vars.set('read_file', (filePath: any) => {
+    try {
+      if (typeof require !== 'undefined') {
+        const fs = require('fs');
+        if (fs.existsSync(String(filePath))) {
+          return fs.readFileSync(String(filePath), 'utf-8');
+        }
+      }
+    } catch {}
+    return '';
+  });
+
+  env.vars.set('write_file', (filePath: any, content: any) => {
+    try {
+      if (typeof require !== 'undefined') {
+        const fs = require('fs');
+        fs.writeFileSync(String(filePath), String(content), 'utf-8');
+        return true;
+      }
+    } catch {}
+    return false;
+  });
+
   // Standard Library Submodules
 
   // Math Module

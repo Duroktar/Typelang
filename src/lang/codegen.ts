@@ -3,9 +3,10 @@ import { Program } from './ast';
 import { JSCodeGenerator, type JSCodeGenOptions } from './codegen_js';
 import { LLVMIRGenerator } from './codegen_llvm';
 import { CCodeGenerator, type CCodeGenOptions } from './codegen_c';
+import { WasmCodeGenerator, type WasmCodeGenOptions } from './codegen_wasm';
 
-export { JSCodeGenerator, LLVMIRGenerator, CCodeGenerator };
-export type { JSCodeGenOptions, CCodeGenOptions };
+export { JSCodeGenerator, LLVMIRGenerator, CCodeGenerator, WasmCodeGenerator };
+export type { JSCodeGenOptions, CCodeGenOptions, WasmCodeGenOptions };
 
 export class LLVMGenerator {
   public generateLLVM(program: Program): string {
@@ -31,6 +32,11 @@ export class LLVMGenerator {
   public generateCpp(program: Program, options?: CCodeGenOptions): string {
     const cGen = new CCodeGenerator();
     return cGen.generate(program, { target: 'cpp', ...options });
+  }
+
+  public generateWasmWAT(program: Program, options?: WasmCodeGenOptions): string {
+    const wasmGen = new WasmCodeGenerator();
+    return wasmGen.generateWat(program, options);
   }
 }
 

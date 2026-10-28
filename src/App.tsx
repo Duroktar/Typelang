@@ -42,6 +42,7 @@ export default function App() {
   const [nodeCode, setNodeCode] = useState<string>('');
   const [cCode, setCCode] = useState<string>('');
   const [cppCode, setCppCode] = useState<string>('');
+  const [watCode, setWatCode] = useState<string>('');
   const [executionTimeMs, setExecutionTimeMs] = useState<number | null>(null);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [hasError, setHasError] = useState<boolean>(false);
@@ -391,6 +392,7 @@ export default function App() {
         if (res.nodeCode) setNodeCode(res.nodeCode);
         if (res.cCode) setCCode(res.cCode);
         if (res.cppCode) setCppCode(res.cppCode);
+        if (res.watCode) setWatCode(res.watCode);
         setHasError(!res.success);
       },
       (err) => {
@@ -425,6 +427,7 @@ export default function App() {
           if (res.nodeCode) setNodeCode(res.nodeCode);
           if (res.cCode) setCCode(res.cCode);
           if (res.cppCode) setCppCode(res.cppCode);
+          if (res.watCode) setWatCode(res.watCode);
         }
       );
     }, 400);
@@ -961,6 +964,7 @@ export default function App() {
               nodeCode={nodeCode}
               cCode={cCode}
               cppCode={cppCode}
+              watCode={watCode}
               executionTimeMs={executionTimeMs}
               hasError={hasError}
               onClearStdout={() => setStdout([])}

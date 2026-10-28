@@ -11,6 +11,7 @@
     "test:harness": "tsx scripts/test_native_harness.ts",
     "test:native": "tsx scripts/test_native_harness.ts",
     "test:bootstrap": "tsx scripts/test_bootstrap_pipeline.ts",
+    "test:wasm": "tsx scripts/test_wasm.ts",
     "bootstrap": "tsx scripts/test_bootstrap_pipeline.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
@@ -39,6 +40,7 @@
     "react-dom": "^19.0.1",
     "string-format": "^2.0.0",
     "vite": "^6.2.3",
+    "wabt": "^1.0.39",
     "zod": "^4.4.3"
   },
   "devDependencies": {
