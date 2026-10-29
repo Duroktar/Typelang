@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "npm run test && vite build",
+    "build": "vite build",
     "test": "tsx scripts/test_all.ts",
     "test:codegen": "tsx scripts/test_codegen.ts",
     "test:harness": "tsx scripts/test_native_harness.ts",

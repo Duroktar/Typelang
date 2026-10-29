@@ -9,6 +9,7 @@ import {
   SFunction,
   SLet,
   SExpr,
+  SGADT,
   ELiteral,
   EVar,
   EBinary,
@@ -21,7 +22,11 @@ import {
   EIndex,
   EAssign,
   EFieldAccess,
-  ERecord
+  ERecord,
+  EMatch,
+  ELambda,
+  Pattern,
+  MatchArm
 } from './ast';
 
 export interface WasmCodeGenOptions {
@@ -40,6 +45,13 @@ export interface WasmExecutionResult {
   error?: string;
 }
 
+export interface GADTConstructorInfo {
+  name: string;
+  tag: number;
+  arity: number;
+  typeName: string;
+}
+
 export class WasmCodeGenerator {
   private indentLevel = 0;
   private stringTable = new Map<string, { offset: number; len: number }>();
@@ -50,6 +62,14 @@ export class WasmCodeGenerator {
   private localCounter = 0;
   private loopStack: { exit: string; loop: string }[] = [];
 
+  private gadtConstructors = new Map<string, GADTConstructorInfo>();
+  private zeroArityCtors = new Set<string>();
+  private lambdas: { id: number; funcName: string; expr: ELambda }[] = [];
+  private lambdaCounter = 0;
+  private topLevelGlobals = new Map<string, 'f64' | 'i32'>();
+  private capturedGlobals = new Set<string>();
+  private isTopLevel = false;
+
   private indent(): string {
     return '  '.repeat(this.indentLevel);
   }
@@ -58,7 +78,7 @@ export class WasmCodeGenerator {
     if (this.stringTable.has(text)) {
       return this.stringTable.get(text)!;
     }
-    const utf8Bytes = Buffer.from(text, 'utf-8');
+    const utf8Bytes = new TextEncoder().encode(text);
     const len = utf8Bytes.length;
     const offset = this.nextStringOffset;
     // Align string to 8 bytes: 4 bytes for length prefix + len bytes + 1 byte null terminator
@@ -73,11 +93,20 @@ export class WasmCodeGenerator {
     return name.replace(/[^a-zA-Z0-9_]/g, '_');
   }
 
+  private registerConstructor(name: string, tag: number, arity: number, typeName: string) {
+    this.gadtConstructors.set(name, { name, tag, arity, typeName });
+    if (arity === 0) {
+      this.zeroArityCtors.add(name);
+    }
+    this.functionNames.add(name);
+    this.fnSignatures.set(name, 'i32');
+  }
+
   private isStringExpr(expr: Expr): boolean {
     if (!expr) return false;
     if (expr.kind === 'e_literal' && typeof expr.value === 'string') return true;
     if (expr.kind === 'e_var') {
-      const type = this.currentLocals.get(expr.name);
+      const type = this.currentLocals.get(expr.name) || this.topLevelGlobals.get(expr.name);
       return type === 'i32';
     }
     if (expr.kind === 'e_call' && expr.callee.kind === 'e_var') {
@@ -93,11 +122,55 @@ export class WasmCodeGenerator {
     return false;
   }
 
+  private isI32Expr(expr: Expr): boolean {
+    if (!expr) return false;
+    if (expr.kind === 'e_literal' && typeof expr.value === 'string') return true;
+    if (expr.kind === 'e_tuple' || expr.kind === 'e_record') return true;
+    if (expr.kind === 'e_var') {
+      if (this.zeroArityCtors.has(expr.name)) return true;
+      const type = this.currentLocals.get(expr.name) || this.topLevelGlobals.get(expr.name);
+      return type === 'i32';
+    }
+    if (expr.kind === 'e_call' && expr.callee.kind === 'e_var') {
+      const name = expr.callee.name;
+      if (this.gadtConstructors.has(name)) return true;
+      if (['concat', 'to_string', 'read_file', 'get_cli_arg', 'String_slice', 'String_charAt', 'char_at', 'charAt'].includes(name)) {
+        return true;
+      }
+      return this.fnSignatures.get(name) === 'i32';
+    }
+    return false;
+  }
+
+  private ensureF64(expr: Expr, wat: string): string {
+    const trimmed = wat.trim();
+    if (!trimmed) return `${this.indent()}(f64.const 0)`;
+    if (this.isI32Expr(expr)) {
+      return `${this.indent()}(f64.convert_i32_u\n${wat}\n${this.indent()})`;
+    }
+    return wat;
+  }
+
+  private ensureI32(expr: Expr, wat: string): string {
+    const trimmed = wat.trim();
+    if (!trimmed) return `${this.indent()}(i32.const 0)`;
+    if (!this.isI32Expr(expr)) {
+      return `${this.indent()}(i32.trunc_f64_u\n${wat}\n${this.indent()})`;
+    }
+    return wat;
+  }
+
   public generateWat(program: Program, options: WasmCodeGenOptions = {}): string {
     this.stringTable.clear();
     this.nextStringOffset = 1024;
     this.functionNames.clear();
     this.fnSignatures.clear();
+    this.gadtConstructors.clear();
+    this.zeroArityCtors.clear();
+    this.lambdas = [];
+    this.lambdaCounter = 0;
+    this.topLevelGlobals.clear();
+    this.capturedGlobals.clear();
     this.loopStack = [];
 
     // Register built-in function signatures
@@ -116,10 +189,26 @@ export class WasmCodeGenerator {
     this.fnSignatures.set('parse_int', 'f64');
     this.fnSignatures.set('parse_float', 'f64');
 
-    const initialPages = options.initialMemoryPages || 2;
-    const maxPages = options.maxMemoryPages || 100;
+    // Register standard Prelude constructors
+    this.registerConstructor('Some', 0, 1, 'Option');
+    this.registerConstructor('None', 1, 0, 'Option');
+    this.registerConstructor('Ok', 0, 1, 'Result');
+    this.registerConstructor('Err', 1, 1, 'Result');
+    this.registerConstructor('Left', 0, 1, 'Either');
+    this.registerConstructor('Right', 1, 1, 'Either');
+    this.registerConstructor('Cons', 0, 2, 'List');
+    this.registerConstructor('Nil', 1, 0, 'List');
 
-    // First pass: collect all user function names and signatures
+    // Collect GADT definitions from program statements
+    for (const stmt of program.statements) {
+      if (stmt.kind === 's_gadt') {
+        stmt.decl.constructors.forEach((ctor, idx) => {
+          this.registerConstructor(ctor.name, idx, ctor.params.length, stmt.decl.name);
+        });
+      }
+    }
+
+    // Collect all user functions
     for (const stmt of program.statements) {
       if (stmt.kind === 's_function') {
         this.functionNames.add(stmt.name);
@@ -139,10 +228,85 @@ export class WasmCodeGenerator {
       }
     }
 
+    // Collect captured parameter and pattern variables across AST
+    const scanParams = (node: any) => {
+      if (!node) return;
+      if (node.kind === 's_function' && node.params) {
+        for (const p of node.params) this.capturedGlobals.add(p.name);
+      }
+      if (node.kind === 'e_lambda' && node.params) {
+        for (const p of node.params) this.capturedGlobals.add(p.name);
+      }
+      if (node.kind === 'p_var' && node.name) {
+        this.capturedGlobals.add(node.name);
+      }
+      for (const k of Object.keys(node)) {
+        const val = node[k];
+        if (val && typeof val === 'object') {
+          if (Array.isArray(val)) {
+            val.forEach(scanParams);
+          } else {
+            scanParams(val);
+          }
+        }
+      }
+    };
+    scanParams(program);
+
+    // Collect top-level let variable names
+    for (const stmt of program.statements) {
+      if (stmt.kind === 's_let') {
+        let type: 'f64' | 'i32' = 'f64';
+        if (stmt.typeAnnotation) {
+          const tName = (stmt.typeAnnotation as any).name;
+          const tKind = (stmt.typeAnnotation as any).kind;
+          if (tName === 'string' || tKind === 't_array') type = 'i32';
+        }
+        if (type === 'f64' && stmt.init) {
+          if ((stmt.init.kind === 'e_literal' && typeof stmt.init.value === 'string') ||
+              (stmt.init.kind === 'e_tuple' || stmt.init.kind === 'e_record') ||
+              this.isStringExpr(stmt.init)) {
+            type = 'i32';
+          }
+        }
+        this.topLevelGlobals.set(stmt.name, type);
+      }
+    }
+
+    const initialPages = options.initialMemoryPages || 2;
+    const maxPages = options.maxMemoryPages || 100;
+
+    // Generate GADT constructor helper functions
+    const ctorFunctionsWat: string[] = [];
+    for (const ctor of this.gadtConstructors.values()) {
+      const ctorName = this.sanitizeWasmIdent(ctor.name);
+      if (ctor.arity === 0) {
+        ctorFunctionsWat.push([
+          `  (func $${ctorName} (result i32)`,
+          `    (call $gadt_create (i32.const ${ctor.tag}) (i32.const 0))`,
+          `  )`
+        ].join('\n'));
+      } else {
+        const paramsStr = Array.from({ length: ctor.arity }, (_, i) => `(param $p${i} f64)`).join(' ');
+        const setFields = Array.from({ length: ctor.arity }, (_, i) =>
+          `    (call $gadt_set_field (local.get $ptr) (i32.const ${i}) (local.get $p${i}))`
+        ).join('\n');
+        ctorFunctionsWat.push([
+          `  (func $${ctorName} ${paramsStr} (result i32)`,
+          `    (local $ptr i32)`,
+          `    (local.set $ptr (call $gadt_create (i32.const ${ctor.tag}) (i32.const ${ctor.arity})))`,
+          setFields,
+          `    (local.get $ptr)`,
+          `  )`
+        ].join('\n'));
+      }
+    }
+
     const functionsWat: string[] = [];
     const mainBodyWat: string[] = [];
 
-    // Generate functions
+    // Generate user functions
+    this.isTopLevel = false;
     for (const stmt of program.statements) {
       if (stmt.kind === 's_function') {
         functionsWat.push(this.generateFunction(stmt));
@@ -153,6 +317,7 @@ export class WasmCodeGenerator {
     this.currentLocals.clear();
     this.localCounter = 0;
     this.indentLevel = 2;
+    this.isTopLevel = true;
     for (const stmt of program.statements) {
       if (stmt.kind !== 's_function') {
         const sWat = this.generateStatement(stmt);
@@ -161,11 +326,20 @@ export class WasmCodeGenerator {
         }
       }
     }
+    this.isTopLevel = false;
+
+    // Generate lambdas that were registered during expression generation
+    const lambdasWat: string[] = [];
+    let lIdx = 0;
+    while (lIdx < this.lambdas.length) {
+      const l = this.lambdas[lIdx++];
+      lambdasWat.push(this.generateLambda(l));
+    }
 
     // Build data section for static string table
     const dataSegments: string[] = [];
     for (const [text, info] of this.stringTable.entries()) {
-      const bytes = Buffer.from(text, 'utf-8');
+      const bytes = new TextEncoder().encode(text);
       const len = bytes.length;
       // 4-byte little endian length
       const lenBytes = [
@@ -193,6 +367,26 @@ export class WasmCodeGenerator {
       mainLocalsWat.push(`    (local $${this.sanitizeWasmIdent(name)} ${type})`);
     }
 
+    // Declare mutable WebAssembly globals for top-level variables and captured closure variables
+    const globalsWat: string[] = [];
+    for (const [name, type] of this.topLevelGlobals.entries()) {
+      const initVal = type === 'i32' ? '(i32.const 0)' : '(f64.const 0.0)';
+      globalsWat.push(`  (global $${this.sanitizeWasmIdent(name)} (mut ${type}) ${initVal})`);
+    }
+    for (const name of this.capturedGlobals) {
+      globalsWat.push(`  (global $g_var_${this.sanitizeWasmIdent(name)} (mut f64) (f64.const 0.0))`);
+    }
+
+    // Function table for indirect function calls (lambdas, function pointers)
+    const tableSize = Math.max(16, this.lambdas.length + 2);
+    const elemEntries = this.lambdas.map(l => `$${l.funcName}`);
+    const tableWat: string[] = [
+      `  (table (export "table") ${tableSize} funcref)`
+    ];
+    if (elemEntries.length > 0) {
+      tableWat.push(`  (elem (i32.const 1) ${elemEntries.join(' ')})`);
+    }
+
     const wat: string[] = [
       '(module',
       '  ;; ==========================================================================',
@@ -213,10 +407,23 @@ export class WasmCodeGenerator {
       '  (import "host" "time_now" (func $host_time_now (result f64)))',
       '  (import "host" "math_pow" (func $host_math_pow (param f64 f64) (result f64)))',
       '',
+      '  ;; --- Indirect Function Signatures ---',
+      '  (type $sig_0 (func (result f64)))',
+      '  (type $sig_1 (func (param f64) (result f64)))',
+      '  (type $sig_2 (func (param f64 f64) (result f64)))',
+      '  (type $sig_3 (func (param f64 f64 f64) (result f64)))',
+      '  (type $sig_4 (func (param f64 f64 f64 f64) (result f64)))',
+      '',
       `  ;; --- Linear Memory (${initialPages} initial pages = ${initialPages * 64}KB) ---`,
       `  (memory (export "memory") ${initialPages} ${maxPages})`,
       `  (global $heap_ptr (mut i32) (i32.const ${this.nextStringOffset}))`,
       '  (export "heap_ptr" (global $heap_ptr))',
+      '',
+      '  ;; --- Module Globals & Closure Storage ---',
+      ...globalsWat,
+      '',
+      '  ;; --- Function Table ---',
+      ...tableWat,
       '',
       '  ;; --- Built-in Dynamic Allocator with Auto-Growth ---',
       '  (func $alloc (export "alloc") (param $size i32) (result i32)',
@@ -319,6 +526,83 @@ export class WasmCodeGenerator {
       '    )',
       '  )',
       '',
+      '  ;; --- Built-in Algebraic Data Type (GADT / Sum Type) Utilities ---',
+      '  ;; GADT Header: [tag: i32, arity: i32, payload: f64[]]',
+      '  (func $gadt_create (param $tag i32) (param $arity i32) (result i32)',
+      '    (local $ptr i32)',
+      '    (local.set $ptr (call $alloc (i32.add (i32.const 8) (i32.mul (local.get $arity) (i32.const 8)))))',
+      '    (i32.store (local.get $ptr) (local.get $tag))',
+      '    (i32.store offset=4 (local.get $ptr) (local.get $arity))',
+      '    (local.get $ptr)',
+      '  )',
+      '',
+      '  (func $gadt_get_tag (param $ptr i32) (result i32)',
+      '    (if (result i32) (i32.eqz (local.get $ptr))',
+      '      (then (i32.const -1))',
+      '      (else (i32.load (local.get $ptr)))',
+      '    )',
+      '  )',
+      '',
+      '  (func $gadt_get_field (param $ptr i32) (param $idx i32) (result f64)',
+      '    (if (result f64) (i32.eqz (local.get $ptr))',
+      '      (then (f64.const 0.0))',
+      '      (else',
+      '        (f64.load (i32.add (i32.add (local.get $ptr) (i32.const 8)) (i32.mul (local.get $idx) (i32.const 8))))',
+      '      )',
+      '    )',
+      '  )',
+      '',
+      '  (func $gadt_set_field (param $ptr i32) (param $idx i32) (param $val f64)',
+      '    (if (i32.ne (local.get $ptr) (i32.const 0))',
+      '      (then',
+      '        (f64.store (i32.add (i32.add (local.get $ptr) (i32.const 8)) (i32.mul (local.get $idx) (i32.const 8))) (local.get $val))',
+      '      )',
+      '    )',
+      '  )',
+      '',
+      '  ;; --- Built-in Record / Object Utilities ---',
+      '  ;; Record Header: [num_fields: i32, fields: { key_str: i32, val: f64 }[]]',
+      '  (func $record_create (param $num_fields i32) (result i32)',
+      '    (local $ptr i32)',
+      '    (local.set $ptr (call $alloc (i32.add (i32.const 8) (i32.mul (local.get $num_fields) (i32.const 16)))))',
+      '    (i32.store (local.get $ptr) (local.get $num_fields))',
+      '    (local.get $ptr)',
+      '  )',
+      '',
+      '  (func $record_set (param $rec i32) (param $idx i32) (param $key i32) (param $val f64)',
+      '    (if (i32.ne (local.get $rec) (i32.const 0))',
+      '      (then',
+      '        (i32.store (i32.add (i32.add (local.get $rec) (i32.const 8)) (i32.mul (local.get $idx) (i32.const 16))) (local.get $key))',
+      '        (f64.store (i32.add (i32.add (local.get $rec) (i32.const 16)) (i32.mul (local.get $idx) (i32.const 16))) (local.get $val))',
+      '      )',
+      '    )',
+      '  )',
+      '',
+      '  (func $record_get (param $rec i32) (param $key i32) (result f64)',
+      '    (local $count i32)',
+      '    (local $i i32)',
+      '    (local $k i32)',
+      '    (if (result f64) (i32.eqz (local.get $rec))',
+      '      (then (f64.const 0.0))',
+      '      (else',
+      '        (local.set $count (i32.load (local.get $rec)))',
+      '        (local.set $i (i32.const 0))',
+      '        (block $b_rec (loop $l_rec',
+      '          (br_if $b_rec (i32.ge_u (local.get $i) (local.get $count)))',
+      '          (local.set $k (i32.load (i32.add (i32.add (local.get $rec) (i32.const 8)) (i32.mul (local.get $i) (i32.const 16)))))',
+      '          (if (i32.or (i32.eq (local.get $k) (local.get $key)) (f64.ne (call $str_eq (local.get $k) (local.get $key)) (f64.const 0.0)))',
+      '            (then',
+      '              (return (f64.load (i32.add (i32.add (local.get $rec) (i32.const 16)) (i32.mul (local.get $i) (i32.const 16)))))',
+      '            )',
+      '          )',
+      '          (local.set $i (i32.add (local.get $i) (i32.const 1)))',
+      '          (br $l_rec)',
+      '        ))',
+      '        (f64.const 0.0)',
+      '      )',
+      '    )',
+      '  )',
+      '',
       '  ;; --- Built-in String Utilities ---',
       '  (func $concat (param $s1 i32) (param $s2 i32) (result i32)',
       '    (local $len1 i32)',
@@ -404,8 +688,14 @@ export class WasmCodeGenerator {
       '  ;; --- Static Data Segments (String Literals) ---',
       ...dataSegments,
       '',
+      '  ;; --- Algebraic Data Type Constructors ---',
+      ...ctorFunctionsWat,
+      '',
       '  ;; --- User Functions ---',
       ...functionsWat,
+      '',
+      '  ;; --- Lambdas & Closures ---',
+      ...lambdasWat,
       '',
       '  ;; --- Main Entry Point ---',
       '  (func (export "_start") (export "main") (result f64)',
@@ -455,6 +745,44 @@ export class WasmCodeGenerator {
     return lines.join('\n');
   }
 
+  private generateLambda(lambda: { id: number; funcName: string; expr: ELambda }): string {
+    const expr = lambda.expr;
+    const savedLocals = new Map(this.currentLocals);
+    this.currentLocals.clear();
+
+    const paramsWat: string[] = [];
+    const paramInits: string[] = [];
+    const localDecls: string[] = [];
+
+    expr.params.forEach((p, idx) => {
+      const pName = this.sanitizeWasmIdent(p.name);
+      this.currentLocals.set(p.name, 'f64');
+      paramsWat.push(`(param $p${idx} f64)`);
+      localDecls.push(`    (local $${pName} f64)`);
+      paramInits.push(`    (local.set $${pName} (local.get $p${idx}))`);
+      paramInits.push(`    (global.set $g_var_${pName} (local.get $p${idx}))`);
+    });
+
+    this.indentLevel = 2;
+    const bodyWat = this.generateFunctionBody(expr.body, false, 'f64');
+
+    for (const [name, type] of this.currentLocals.entries()) {
+      if (!expr.params.some(p => p.name === name)) {
+        localDecls.push(`    (local $${this.sanitizeWasmIdent(name)} ${type})`);
+      }
+    }
+
+    this.currentLocals = savedLocals;
+
+    return [
+      `  (func $${lambda.funcName} ${paramsWat.join(' ')} (result f64)`,
+      ...localDecls,
+      ...paramInits,
+      bodyWat,
+      '  )'
+    ].join('\n');
+  }
+
   private generateFunctionBody(body: Expr, isVoid: boolean, retKind: string): string {
     if (!body) {
       return isVoid ? '' : `${this.indent()}(${retKind}.const 0)`;
@@ -472,7 +800,8 @@ export class WasmCodeGenerator {
         if (isLast && !body.result && !isVoid) {
           // If the last statement is an expression statement, generate as return value
           if (stmt.kind === 's_expr' && stmt.expr) {
-            bodyLines.push(this.generateExpr(stmt.expr, false));
+            const valWat = this.generateExpr(stmt.expr, false);
+            bodyLines.push(retKind === 'f64' ? this.ensureF64(stmt.expr, valWat) : valWat);
           } else {
             bodyLines.push(this.generateStatement(stmt));
             bodyLines.push(`${this.indent()}(${retKind}.const 0)`);
@@ -486,7 +815,8 @@ export class WasmCodeGenerator {
         if (isVoid) {
           bodyLines.push(this.generateStatement({ kind: 's_expr', expr: body.result }));
         } else {
-          bodyLines.push(this.generateExpr(body.result, false));
+          const valWat = this.generateExpr(body.result, false);
+          bodyLines.push(retKind === 'f64' ? this.ensureF64(body.result, valWat) : valWat);
         }
       } else if (count === 0 && !isVoid) {
         bodyLines.push(`${this.indent()}(${retKind}.const 0)`);
@@ -499,7 +829,8 @@ export class WasmCodeGenerator {
     if (isVoid) {
       return this.generateExpr(body, true);
     }
-    return this.generateExpr(body, false);
+    const valWat = this.generateExpr(body, false);
+    return retKind === 'f64' ? this.ensureF64(body, valWat) : valWat;
   }
 
   private generateStatement(stmt: Statement): string {
@@ -520,8 +851,22 @@ export class WasmCodeGenerator {
           }
         }
         this.currentLocals.set(stmt.name, type);
-        const initVal = this.generateExpr(stmt.init, false);
+        let initVal = this.generateExpr(stmt.init, false);
+        if (type === 'f64' && this.isI32Expr(stmt.init)) {
+          initVal = this.ensureF64(stmt.init, initVal);
+        } else if (type === 'i32' && !this.isI32Expr(stmt.init)) {
+          initVal = this.ensureI32(stmt.init, initVal);
+        }
+
+        if (this.isTopLevel) {
+          this.topLevelGlobals.set(stmt.name, type);
+          return `${this.indent()}(local.set $${varName}\n${initVal}\n${this.indent()})\n${this.indent()}(global.set $${varName} (local.get $${varName}))`;
+        }
         return `${this.indent()}(local.set $${varName}\n${initVal}\n${this.indent()})`;
+      }
+
+      case 's_gadt': {
+        return '';
       }
 
       case 's_expr': {
@@ -540,6 +885,9 @@ export class WasmCodeGenerator {
           return this.generateExpr(stmt.expr, true);
         }
         if (stmt.expr.kind === 'e_if') {
+          return this.generateExpr(stmt.expr, true);
+        }
+        if (stmt.expr.kind === 'e_match') {
           return this.generateExpr(stmt.expr, true);
         }
         if (stmt.expr.kind === 'e_return') {
@@ -624,6 +972,18 @@ export class WasmCodeGenerator {
 
       case 'e_var': {
         const vName = this.sanitizeWasmIdent(expr.name);
+        if (this.currentLocals.has(expr.name)) {
+          return `${this.indent()}(local.get $${vName})`;
+        }
+        if (this.zeroArityCtors.has(expr.name)) {
+          return `${this.indent()}(call $${vName})`;
+        }
+        if (this.topLevelGlobals.has(expr.name)) {
+          return `${this.indent()}(global.get $${vName})`;
+        }
+        if (this.capturedGlobals.has(expr.name)) {
+          return `${this.indent()}(global.get $g_var_${vName})`;
+        }
         return `${this.indent()}(local.get $${vName})`;
       }
 
@@ -632,14 +992,23 @@ export class WasmCodeGenerator {
           const vName = this.sanitizeWasmIdent(expr.target.name);
           const val = this.generateExpr(expr.value, false);
           const op = expr.op;
+          let assignWat = '';
           if (op && op !== '=') {
             const mathOp = op === '+=' ? 'f64.add' :
                            op === '-=' ? 'f64.sub' :
                            op === '*=' ? 'f64.mul' :
                            op === '/=' ? 'f64.div' : 'f64.add';
-            return `${this.indent()}(local.set $${vName}\n${this.indent()}  (${mathOp} (local.get $${vName})\n${val}\n${this.indent()}  )\n${this.indent()})`;
+            assignWat = `${this.indent()}(local.set $${vName}\n${this.indent()}  (${mathOp} (local.get $${vName})\n${val}\n${this.indent()}  )\n${this.indent()})`;
+          } else {
+            assignWat = `${this.indent()}(local.set $${vName}\n${val}\n${this.indent()})`;
           }
-          return `${this.indent()}(local.set $${vName}\n${val}\n${this.indent()})`;
+          if (this.topLevelGlobals.has(expr.target.name)) {
+            assignWat += `\n${this.indent()}(global.set $${vName} (local.get $${vName}))`;
+          }
+          if (this.capturedGlobals.has(expr.target.name)) {
+            assignWat += `\n${this.indent()}(global.set $g_var_${vName} (local.get $${vName}))`;
+          }
+          return assignWat;
         }
         if (expr.target.kind === 'e_index') {
           const arr = this.generateExpr(expr.target.target, false);
@@ -776,7 +1145,9 @@ export class WasmCodeGenerator {
         const loopId = ++this.localCounter;
         const exitLabel = `for_exit_${loopId}`;
         const loopLabel = `for_loop_${loopId}`;
-        this.loopStack.push({ exit: exitLabel, loop: loopLabel });
+        const contLabel = `for_cont_${loopId}`;
+        // Push contLabel as the loop target for continue statement
+        this.loopStack.push({ exit: exitLabel, loop: contLabel });
 
         const initWat = expr.init
           ? (expr.init.kind.startsWith('s_')
@@ -794,7 +1165,9 @@ export class WasmCodeGenerator {
           `${this.indent()}(block $${exitLabel}`,
           `${this.indent()}  (loop $${loopLabel}`,
           `${this.indent()}    (br_if $${exitLabel} (i32.eqz ${condWat}))`,
+          `${this.indent()}    (block $${contLabel}`,
           bodyWat,
+          `${this.indent()}    )`,
           updateWat,
           `${this.indent()}    (br $${loopLabel})`,
           `${this.indent()}  )`,
@@ -882,7 +1255,7 @@ export class WasmCodeGenerator {
               const strPtr = this.generateExpr(arg, false);
               return `${this.indent()}(call $println_str_val\n${strPtr}\n${this.indent()})`;
             }
-            const val = this.generateExpr(arg, false);
+            const val = this.ensureF64(arg, this.generateExpr(arg, false));
             return `${this.indent()}(call $host_println_num\n${val}\n${this.indent()})`;
           }
 
@@ -892,7 +1265,7 @@ export class WasmCodeGenerator {
               const strPtr = this.generateExpr(arg, false);
               return `${this.indent()}(call $print_str_val\n${strPtr}\n${this.indent()})`;
             }
-            const val = this.generateExpr(arg, false);
+            const val = this.ensureF64(arg, this.generateExpr(arg, false));
             return `${this.indent()}(call $host_print_num\n${val}\n${this.indent()})`;
           }
 
@@ -903,7 +1276,7 @@ export class WasmCodeGenerator {
           }
 
           if (fnName === 'to_string' && expr.args.length === 1) {
-            const n = this.generateExpr(expr.args[0], false);
+            const n = this.ensureF64(expr.args[0], this.generateExpr(expr.args[0], false));
             return `${this.indent()}(call $host_num_to_str\n${n}\n${this.indent()})`;
           }
 
@@ -914,7 +1287,7 @@ export class WasmCodeGenerator {
 
           if ((fnName === 'push' || (mod === 'Array' && fnName === 'push')) && expr.args.length === 2) {
             const arr = this.generateExpr(expr.args[0], false);
-            const val = this.generateExpr(expr.args[1], false);
+            const val = this.ensureF64(expr.args[1], this.generateExpr(expr.args[1], false));
             return `${this.indent()}(call $array_push\n${arr}\n${val}\n${this.indent()})`;
           }
 
@@ -954,11 +1327,41 @@ export class WasmCodeGenerator {
             return `${this.indent()}(call $str_char_at\n${s}\n${idx}\n${this.indent()})`;
           }
 
-          // User-defined function call
-          const argsWat = expr.args.map(a => this.generateExpr(a, false)).join('\n');
-          return `${this.indent()}(call $${this.sanitizeWasmIdent(fnName)}\n${argsWat}\n${this.indent()})`;
+          // Check if calling a GADT constructor
+          if (this.gadtConstructors.has(fnName)) {
+            const argsWat = expr.args.map(a => this.ensureF64(a, this.generateExpr(a, false))).join('\n');
+            return `${this.indent()}(call $${this.sanitizeWasmIdent(fnName)}\n${argsWat}\n${this.indent()})`;
+          }
+
+          // User-defined top-level function call
+          if (this.functionNames.has(fnName)) {
+            const argsWat = expr.args.map(a => this.generateExpr(a, false)).join('\n');
+            return `${this.indent()}(call $${this.sanitizeWasmIdent(fnName)}\n${argsWat}\n${this.indent()})`;
+          }
+
+          // Variable holding a function reference or lambda parameter (e.g. f(v))
+          const arity = Math.min(4, expr.args.length);
+          const fnIdxWat = `(i32.trunc_f64_u (local.get $${this.sanitizeWasmIdent(fnName)}))`;
+          const argsWat = expr.args.map(a => this.ensureF64(a, this.generateExpr(a, false))).join('\n');
+          return `${this.indent()}(call_indirect (type $sig_${arity})\n${argsWat}\n${this.indent()}  ${fnIdxWat}\n${this.indent()})`;
         }
-        return `${this.indent()}(f64.const 0)`;
+
+        // Callee is field access on a record (e.g. functor.map(container, f1), optionMonad.flatMap(ma, f))
+        if (expr.callee.kind === 'e_field_access') {
+          const objWat = this.generateExpr(expr.callee.object, false);
+          const keyInfo = this.registerString(expr.callee.field);
+          const arity = Math.min(4, expr.args.length);
+          const argsWat = expr.args.map(a => this.ensureF64(a, this.generateExpr(a, false))).join('\n');
+          const fnIdxWat = `(i32.trunc_f64_u (call $record_get ${this.ensureI32(expr.callee.object, objWat)} (i32.const ${keyInfo.offset})))`;
+          return `${this.indent()}(call_indirect (type $sig_${arity})\n${argsWat}\n${this.indent()}  ${fnIdxWat}\n${this.indent()})`;
+        }
+
+        // Callee is an arbitrary expression evaluating to a function index
+        const calleeWat = this.generateExpr(expr.callee, false);
+        const arity = Math.min(4, expr.args.length);
+        const argsWat = expr.args.map(a => this.ensureF64(a, this.generateExpr(a, false))).join('\n');
+        const fnIdxWat = `(i32.trunc_f64_u ${calleeWat.trim()})`;
+        return `${this.indent()}(call_indirect (type $sig_${arity})\n${argsWat}\n${this.indent()}  ${fnIdxWat}\n${this.indent()})`;
       }
 
       case 'e_field_access': {
@@ -966,7 +1369,9 @@ export class WasmCodeGenerator {
           const obj = this.generateExpr(expr.object, false);
           return `${this.indent()}(call $len\n${obj}\n${this.indent()})`;
         }
-        return `${this.indent()}(f64.const 0)`;
+        const objWat = this.generateExpr(expr.object, false);
+        const keyInfo = this.registerString(expr.field);
+        return `${this.indent()}(call $record_get\n${this.ensureI32(expr.object, objWat)}\n${this.indent()}(i32.const ${keyInfo.offset})\n${this.indent()})`;
       }
 
       case 'e_method_call': {
@@ -977,7 +1382,7 @@ export class WasmCodeGenerator {
         }
         if (method === 'push' && expr.args.length === 1) {
           const obj = this.generateExpr(expr.object, false);
-          const val = this.generateExpr(expr.args[0], false);
+          const val = this.ensureF64(expr.args[0], this.generateExpr(expr.args[0], false));
           const pushCall = `${this.indent()}(call $array_push\n${obj}\n${val}\n${this.indent()})`;
           return isStatement ? `${this.indent()}(drop\n${pushCall}\n${this.indent()})` : pushCall;
         }
@@ -986,7 +1391,15 @@ export class WasmCodeGenerator {
           const idx = this.generateExpr(expr.args[0], false);
           return `${this.indent()}(call $str_char_at\n${obj}\n${idx}\n${this.indent()})`;
         }
-        return isStatement ? '' : `${this.indent()}(f64.const 0)`;
+
+        // Method call on a record/object: obj.method(...args)
+        const objWat = this.generateExpr(expr.object, false);
+        const keyInfo = this.registerString(method);
+        const arity = Math.min(4, expr.args.length);
+        const argsWat = expr.args.map(a => this.ensureF64(a, this.generateExpr(a, false))).join('\n');
+        const fnIdxWat = `(i32.trunc_f64_u (call $record_get ${this.ensureI32(expr.object, objWat)} (i32.const ${keyInfo.offset})))`;
+        const callWat = `${this.indent()}(call_indirect (type $sig_${arity})\n${argsWat}\n${this.indent()}  ${fnIdxWat}\n${this.indent()})`;
+        return isStatement ? `${this.indent()}(drop\n${callWat}\n${this.indent()})` : callWat;
       }
 
       case 'e_tuple': {
@@ -998,13 +1411,122 @@ export class WasmCodeGenerator {
           `${this.indent()}(local.set $${tempArr} (call $array_create (i32.const ${count})))`
         ];
         for (let i = 0; i < count; i++) {
-          const valWat = this.generateExpr(elems[i], false);
+          const valWat = this.ensureF64(elems[i], this.generateExpr(elems[i], false));
           setupLines.push(
             `${this.indent()}(f64.store (i32.add (i32.add (local.get $${tempArr}) (i32.const 8)) (i32.const ${i * 8})) ${valWat.trim()})`
           );
         }
         setupLines.push(`${this.indent()}(local.get $${tempArr})`);
         return setupLines.join('\n');
+      }
+
+      case 'e_record': {
+        const fields = expr.fields || [];
+        const count = fields.length;
+        const tempRec = `_rec_${++this.localCounter}`;
+        this.currentLocals.set(tempRec, 'i32');
+        const setupLines: string[] = [
+          `${this.indent()}(local.set $${tempRec} (call $record_create (i32.const ${count})))`
+        ];
+        fields.forEach((f, idx) => {
+          const keyInfo = this.registerString(f.name);
+          const valWat = this.ensureF64(f.value, this.generateExpr(f.value, false));
+          setupLines.push(
+            `${this.indent()}(call $record_set (local.get $${tempRec}) (i32.const ${idx}) (i32.const ${keyInfo.offset}) ${valWat.trim()})`
+          );
+        });
+        setupLines.push(`${this.indent()}(local.get $${tempRec})`);
+        return setupLines.join('\n');
+      }
+
+      case 'e_lambda': {
+        const lambdaId = ++this.lambdaCounter;
+        const funcName = `_lambda_${lambdaId}`;
+        this.lambdas.push({ id: lambdaId, funcName, expr });
+        return `${this.indent()}(f64.const ${lambdaId}.0)`;
+      }
+
+      case 'e_match': {
+        const matchId = ++this.localCounter;
+        const scrutineeVar = `_scrutinee_${matchId}`;
+        const matchResVar = `_match_res_${matchId}`;
+        this.currentLocals.set(scrutineeVar, 'i32');
+        if (!isStatement) {
+          this.currentLocals.set(matchResVar, 'f64');
+        }
+
+        const scrutineeWat = this.ensureI32(expr.scrutinee, this.generateExpr(expr.scrutinee, false));
+        const exitLabel = `match_exit_${matchId}`;
+
+        const armsWat: string[] = [];
+        for (const arm of expr.arms) {
+          const pat = arm.pattern;
+          let condWat = '(i32.const 1)';
+          const bindLines: string[] = [];
+
+          if (pat.kind === 'p_ctor') {
+            const ctorInfo = this.gadtConstructors.get(pat.name);
+            const tag = ctorInfo ? ctorInfo.tag : 0;
+            condWat = `(i32.eq (call $gadt_get_tag (local.get $${scrutineeVar})) (i32.const ${tag}))`;
+            (pat.args || []).forEach((arg, idx) => {
+              if (arg.kind === 'p_var') {
+                const varName = this.sanitizeWasmIdent(arg.name);
+                this.currentLocals.set(arg.name, 'f64');
+                bindLines.push(
+                  `${this.indent()}    (local.set $${varName} (call $gadt_get_field (local.get $${scrutineeVar}) (i32.const ${idx})))`
+                );
+                bindLines.push(
+                  `${this.indent()}    (global.set $g_var_${varName} (local.get $${varName}))`
+                );
+              }
+            });
+          } else if (pat.kind === 'p_var') {
+            const varName = this.sanitizeWasmIdent(pat.name);
+            this.currentLocals.set(pat.name, 'f64');
+            bindLines.push(
+              `${this.indent()}    (local.set $${varName} (f64.convert_i32_u (local.get $${scrutineeVar})))`
+            );
+            bindLines.push(
+              `${this.indent()}    (global.set $g_var_${varName} (local.get $${varName}))`
+            );
+          } else if (pat.kind === 'p_literal') {
+            if (typeof pat.value === 'number') {
+              condWat = `(f64.eq (f64.convert_i32_u (local.get $${scrutineeVar})) (f64.const ${pat.value}))`;
+            }
+          }
+
+          if (arm.guard) {
+            condWat = `(i32.and ${condWat} ${this.generateCondition(arm.guard).trim()})`;
+          }
+
+          let bodyWat = '';
+          if (isStatement) {
+            bodyWat = this.generateBlockOrStatement(arm.body);
+          } else {
+            const valWat = this.ensureF64(arm.body, this.generateExpr(arm.body, false));
+            bodyWat = `${this.indent()}    (local.set $${matchResVar} ${valWat.trim()})`;
+          }
+
+          armsWat.push([
+            `${this.indent()}  (if ${condWat}`,
+            `${this.indent()}    (then`,
+            bindLines.join('\n'),
+            bodyWat,
+            `${this.indent()}      (br $${exitLabel})`,
+            `${this.indent()}    )`,
+            `${this.indent()}  )`
+          ].filter(Boolean).join('\n'));
+        }
+
+        const lines = [
+          `${this.indent()}(local.set $${scrutineeVar} ${scrutineeWat.trim()})`,
+          `${this.indent()}(block $${exitLabel}`,
+          armsWat.join('\n'),
+          `${this.indent()})`,
+          isStatement ? '' : `${this.indent()}(local.get $${matchResVar})`
+        ].filter(Boolean).join('\n');
+
+        return lines;
       }
 
       case 'e_index': {
@@ -1023,7 +1545,8 @@ export class WasmCodeGenerator {
 
           if (isLast && !expr.result && !isStatement) {
             if (s.kind === 's_expr' && s.expr) {
-              bodyLines.push(this.generateExpr(s.expr, false));
+              const valWat = this.generateExpr(s.expr, false);
+              bodyLines.push(this.ensureF64(s.expr, valWat));
             } else {
               bodyLines.push(this.generateStatement(s));
               bodyLines.push(`${this.indent()}(f64.const 0)`);
@@ -1037,7 +1560,8 @@ export class WasmCodeGenerator {
           if (isStatement) {
             bodyLines.push(this.generateStatement({ kind: 's_expr', expr: expr.result }));
           } else {
-            bodyLines.push(this.generateExpr(expr.result, false));
+            const valWat = this.generateExpr(expr.result, false);
+            bodyLines.push(this.ensureF64(expr.result, valWat));
           }
         } else if (count === 0 && !isStatement) {
           bodyLines.push(`${this.indent()}(f64.const 0)`);

@@ -1,6 +1,0 @@
-{
-  "summary": "Comprehensive architectural plan for the TypeLang self-hosted compiler in /bootstrap, targeting standard C11/C99 with multi-stage verification (Stage 1 -> Stage 2 -> Fixed Point Parity), dedicated modular structure, and IDE playground updates.",
-  "updatedAt": "2026-10-14T03:24:54.325631379Z",
-  "requestFeedback": true,
-  "userFacing": true
-}

@@ -6,6 +6,7 @@ import { SpecDoc } from './components/SpecDoc';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
 import { PromptDialog } from './components/PromptDialog';
 import { LiveAppPreview } from './components/LiveAppPreview';
+import { LandingPage } from './components/LandingPage';
 import { EXAMPLES, ExampleProgram } from './lang/examples';
 import { Lexer } from './lang/lexer';
 import { Parser } from './lang/parser';
@@ -29,6 +30,30 @@ import { JSSandbox } from './lang/js_runtime';
 const STORAGE_KEY = 'typelang_project_v1';
 
 export default function App() {
+  const [currentView, setCurrentView] = useState<'landing' | 'playground'>(() => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname;
+      const hash = window.location.hash;
+      if (path.includes('playground') || hash.includes('playground')) {
+        return 'playground';
+      }
+    }
+    return 'landing';
+  });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash.includes('playground')) {
+        setCurrentView('playground');
+      } else if (hash === '#landing' || hash === '#/') {
+        setCurrentView('landing');
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [activeFileId, setActiveFileId] = useState<string>('');
   const [currentExampleId, setCurrentExampleId] = useState<string>('');
@@ -614,6 +639,25 @@ export default function App() {
     );
   };
 
+  if (currentView === 'landing') {
+    return (
+      <LandingPage
+        onOpenPlayground={() => {
+          window.location.hash = '#playground';
+          setCurrentView('playground');
+        }}
+        onOpenSpec={() => setIsSpecOpen(true)}
+        onLoadExampleInPlayground={(code) => {
+          const id = Math.random().toString(36).substring(7);
+          setFiles([{ id, name: 'main.tl', content: code }]);
+          setActiveFileId(id);
+          window.location.hash = '#playground';
+          setCurrentView('playground');
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 font-sans text-slate-100 overflow-hidden">
       <Header
@@ -639,6 +683,10 @@ export default function App() {
         onTogglePreview={() => setIsLivePreviewOpen(!isLivePreviewOpen)}
         isPreviewOpen={isLivePreviewOpen}
         copied={copied}
+        onBackToLanding={() => {
+          window.location.hash = '#landing';
+          setCurrentView('landing');
+        }}
       />
 
       <div ref={splitAreaRef} className="flex-1 flex flex-col md:flex-row overflow-hidden relative">

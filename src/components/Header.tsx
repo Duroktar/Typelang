@@ -23,6 +23,7 @@ interface HeaderProps {
   onTogglePreview: () => void;
   isPreviewOpen: boolean;
   copied: boolean;
+  onBackToLanding?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -44,7 +45,8 @@ export const Header: React.FC<HeaderProps> = ({
   onLoad,
   onTogglePreview,
   isPreviewOpen,
-  copied
+  copied,
+  onBackToLanding
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = React.useState(false);
@@ -63,6 +65,15 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="relative bg-slate-900 border-b border-slate-800 px-2 sm:px-3 py-1.5 sm:py-2 text-slate-200 flex items-center justify-between gap-1.5 sm:gap-2 shadow-md z-50 w-full max-w-full overflow-visible">
       {/* Brand */}
       <div className="flex items-center space-x-2 shrink-0">
+        {onBackToLanding && (
+          <button
+            onClick={onBackToLanding}
+            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs font-bold flex items-center space-x-1 border border-slate-700 cursor-pointer"
+            title="Return to Landing Page"
+          >
+            <span>← Home</span>
+          </button>
+        )}
         <div className="w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-br from-indigo-600 to-purple-700 rounded-lg sm:rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
           <Code2 className="w-4 h-4 text-white" />
         </div>
