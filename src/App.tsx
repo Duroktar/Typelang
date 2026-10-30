@@ -1081,6 +1081,8 @@ export default function App() {
         isOpen={isLLVMStudioOpen}
         onClose={() => setIsLLVMStudioOpen(false)}
         initialLLVMCode={llvmCode}
+        currentSourceCode={getCombinedSourceWithMap(files).combinedSource || activeCode}
+        programAST={programAST}
       />
 
       <VSCodeExportModal

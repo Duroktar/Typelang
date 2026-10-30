@@ -83,9 +83,17 @@ export {
   CODEGEN_TEST_CASES,
   runCodegenTestSuite,
 } from './tests_codegen';
-export type {
-  CodegenTestCase,
-  CodegenTestResult,
-  CodegenSuiteSummary,
-} from './tests_codegen';
+
+// Core Language Pipeline
+export { CoreLowerer } from './core_lower';
+export { coreToString } from './core';
+export type { CoreProgram, CoreExpr, CoreDecl, CoreType } from './core';
+export { CoreLLVMCodeGen } from './core_codegen_llvm';
+export { LLVMInterpreter } from './llvm_interpreter';
+export type { LLVMExecutionResult } from './llvm_interpreter';
+
+// CLI Frontend API
+export { runCli, cliRegistry } from '../cli/index';
+export type { Command, CommandContext, CommandOption } from '../cli/types';
+
 

@@ -243,6 +243,7 @@ export class LLVMInterpreter {
         const payload = args.length === 1 ? args[0] : (args.length === 0 ? null : args);
         const structObj = {
           tag: this.inferTag(cleanName),
+          ctor: ctorName,
           payload,
           _ptr: ptr
         };
@@ -328,6 +329,44 @@ export class LLVMInterpreter {
 
   private executeBuiltin(name: string, args: any[]): { handled: boolean; value: any } {
     switch (name) {
+      case '_tl_match_ctor': {
+        const obj = args[0];
+        const ctor = typeof args[1] === 'object' && args[1]?._str ? args[1]._str : String(args[1] ?? '');
+        if (obj && typeof obj === 'object') {
+          if ('ctor' in obj && (obj.ctor === ctor || obj.ctor.endsWith(`_${ctor}`))) {
+            return { handled: true, value: 1 };
+          }
+          if ('tag' in obj && obj.tag === this.inferTag(ctor)) {
+            return { handled: true, value: 1 };
+          }
+        }
+        return { handled: true, value: 0 };
+      }
+      case '_tl_get_field': {
+        const obj = args[0];
+        const idx = Number(args[1] || 0);
+        if (obj && typeof obj === 'object' && 'payload' in obj) {
+          if (Array.isArray(obj.payload)) {
+            return { handled: true, value: obj.payload[idx] };
+          }
+          if (idx === 0) {
+            return { handled: true, value: obj.payload };
+          }
+        }
+        return { handled: true, value: 0 };
+      }
+      case 'concat': {
+        const a = typeof args[0] === 'object' && args[0]?._str !== undefined ? args[0]._str : String(args[0] ?? '');
+        const b = typeof args[1] === 'object' && args[1]?._str !== undefined ? args[1]._str : String(args[1] ?? '');
+        return { handled: true, value: a + b };
+      }
+      case 'to_string': {
+        const val = args[0];
+        if (typeof val === 'number') {
+          return { handled: true, value: Number.isInteger(val) ? String(val) : String(val) };
+        }
+        return { handled: true, value: String(val ?? '') };
+      }
       case 'strlen': {
         const arg = args[0];
         const str = typeof arg === 'object' && arg !== null && '_str' in arg ? String(arg._str) : (arg !== undefined && arg !== null ? String(arg) : '');

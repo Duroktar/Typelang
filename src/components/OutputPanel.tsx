@@ -40,6 +40,11 @@ import { LiveAppPreview } from './LiveAppPreview';
 import { FFIPanel } from './FFIPanel';
 import { TypeExplorer } from './TypeExplorer';
 import { ASTViewer } from './ASTViewer';
+import { CoreLowerer } from '../lang/core_lower';
+import { coreToString } from '../lang/core';
+import { CoreLLVMCodeGen } from '../lang/core_codegen_llvm';
+import { Lexer } from '../lang/lexer';
+import { Parser } from '../lang/parser';
 import { TypeHierarchyVisualizer } from './TypeHierarchyVisualizer';
 import { StdLibExplorer } from './StdLibExplorer';
 import { AnsiRenderer } from './AnsiRenderer';
@@ -114,12 +119,57 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   const [isRunningWasm, setIsRunningWasm] = useState<boolean>(false);
   const [consoleFilter, setConsoleFilter] = useState<string>('');
   const [isWordWrapEnabled, setIsWordWrapEnabled] = useState<boolean>(false);
+  const [llvmPipeline, setLlvmPipeline] = useState<'legacy' | 'core'>('core');
+  const [coreViewMode, setCoreViewMode] = useState<'llvm' | 'core_ir'>('llvm');
+
+  const effectiveAST = React.useMemo(() => {
+    if (programAST) return programAST;
+    if (!code || !code.trim()) return null;
+    try {
+      const lexer = new Lexer(code);
+      const tokens = lexer.tokenize();
+      const parser = new Parser(tokens);
+      return parser.parseProgram();
+    } catch {
+      return null;
+    }
+  }, [programAST, code]);
+
+  const coreProg = React.useMemo(() => {
+    if (!effectiveAST) return null;
+    try {
+      const lowerer = new CoreLowerer();
+      return lowerer.lower(effectiveAST);
+    } catch {
+      return null;
+    }
+  }, [effectiveAST]);
+
+  const coreIrCode = React.useMemo(() => {
+    if (!coreProg) return '// No Core IR available (parse error or empty)';
+    try {
+      return coreToString(coreProg);
+    } catch (e: any) {
+      return `// Failed to lower to Core IR: ${e.message}`;
+    }
+  }, [coreProg]);
+
+  const coreLlvmCode = React.useMemo(() => {
+    if (!coreProg) return llvmCode || '; No Core IR available';
+    try {
+      const coreCodeGen = new CoreLLVMCodeGen();
+      return coreCodeGen.generate(coreProg);
+    } catch (e: any) {
+      return llvmCode || `; Failed to generate Core LLVM: ${e.message}`;
+    }
+  }, [coreProg, llvmCode]);
 
   const { compileLLVMToBinary, downloadBinary, isCompiling: isBuildingWasm } = useWasmCompiler();
 
   const handleBuildAndDownloadWasm = async () => {
     try {
-      const res = await compileLLVMToBinary(llvmCode);
+      const codeToCompile = llvmPipeline === 'core' ? coreLlvmCode : llvmCode;
+      const res = await compileLLVMToBinary(codeToCompile);
       downloadBinary(res.binary, 'program.wasm');
     } catch (e) {
       console.error('Failed to compile WASM binary', e);
@@ -176,7 +226,8 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
     setIsRunningLLVM(true);
     setTimeout(() => {
       const interpreter = new LLVMInterpreter();
-      const res = interpreter.execute(llvmCode);
+      const targetCode = llvmPipeline === 'core' ? coreLlvmCode : llvmCode;
+      const res = interpreter.execute(targetCode);
       setLlvmResult(res);
       setIsRunningLLVM(false);
     }, 40);
@@ -1256,7 +1307,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                   onClick={() => {
                     const currentCode =
                       codegenSubTab === 'llvm'
-                        ? llvmCode
+                        ? (llvmPipeline === 'core' ? (coreViewMode === 'core_ir' ? coreIrCode : coreLlvmCode) : llvmCode)
                         : codegenSubTab === 'node'
                         ? nodeCode
                         : codegenSubTab === 'c'
@@ -1390,10 +1441,66 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
               </div>
             )}
 
+            {codegenSubTab === 'llvm' && (
+              <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 space-y-2 mb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-semibold text-slate-300">Compilation Pipeline:</span>
+                    <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+                      <button
+                        onClick={() => setLlvmPipeline('core')}
+                        className={`px-3 py-1 rounded-md font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+                          llvmPipeline === 'core'
+                            ? 'bg-purple-600 text-white shadow'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Sparkles className="w-3 h-3 text-purple-300" />
+                        <span>Core Pipeline (Haskell Core + llvm-bindings)</span>
+                      </button>
+                      <button
+                        onClick={() => setLlvmPipeline('legacy')}
+                        className={`px-3 py-1 rounded-md font-bold transition cursor-pointer ${
+                          llvmPipeline === 'legacy'
+                            ? 'bg-slate-700 text-white shadow'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>Legacy AST Pipeline</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {llvmPipeline === 'core' && (
+                    <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+                      <button
+                        onClick={() => setCoreViewMode('llvm')}
+                        className={`px-2.5 py-1 rounded font-medium transition cursor-pointer ${
+                          coreViewMode === 'llvm' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Core LLVM IR
+                      </button>
+                      <button
+                        onClick={() => setCoreViewMode('core_ir')}
+                        className={`px-2.5 py-1 rounded font-medium transition cursor-pointer ${
+                          coreViewMode === 'core_ir' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Core IR Source (.core)
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="text-[11px] text-slate-400 flex items-center justify-between bg-slate-950/80 px-3 py-1.5 rounded border border-slate-800/80">
               <span>
                 {codegenSubTab === 'llvm'
-                  ? 'Target: x86_64 POSIX Native | Tagged Union Allocations & LLVM SSA form'
+                  ? (llvmPipeline === 'core'
+                      ? (coreViewMode === 'core_ir' ? 'Target: TypeLang Core IR (.core) | Haskell-style Small Functional Intermediate Representation' : 'Target: LLVM IR via Core Lowering & llvm-bindings')
+                      : 'Target: x86_64 POSIX Native | Tagged Union Allocations & LLVM SSA form')
                   : codegenSubTab === 'node'
                   ? 'Target: Node.js 18+ Backend | CommonJS Express bindings & Server Prelude'
                   : codegenSubTab === 'c'
@@ -1406,7 +1513,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
               </span>
               <span className="font-mono text-slate-500 text-[10px]">
                 {codegenSubTab === 'llvm'
-                  ? `${llvmCode.split('\n').length} lines`
+                  ? `${(llvmPipeline === 'core' ? (coreViewMode === 'core_ir' ? coreIrCode : coreLlvmCode) : llvmCode).split('\n').length} lines`
                   : codegenSubTab === 'node'
                   ? `${nodeCode.split('\n').length} lines`
                   : codegenSubTab === 'c'
@@ -1425,7 +1532,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
               isWordWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'
             }`}>
               {codegenSubTab === 'llvm'
-                ? llvmCode
+                ? (llvmPipeline === 'core' ? (coreViewMode === 'core_ir' ? coreIrCode : coreLlvmCode) : llvmCode)
                 : codegenSubTab === 'node'
                 ? nodeCode
                 : codegenSubTab === 'c'

@@ -26,12 +26,32 @@ import {
 import { LLVMInterpreter, LLVMExecutionResult } from '../lang/llvm_interpreter';
 import { runLLVMUnitTests } from '../lang/tests_llvm';
 import { useWasmCompiler, WasmCompilationResult } from '../lang/wasmCompiler';
+import { CoreLowerer } from '../lang/core_lower';
+import { coreToString } from '../lang/core';
+import { CoreLLVMCodeGen } from '../lang/core_codegen_llvm';
+import { Lexer } from '../lang/lexer';
+import { Parser } from '../lang/parser';
+import type { Program } from '../lang/ast';
 
 interface LLVMStudioModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialLLVMCode: string;
+  currentSourceCode?: string;
+  programAST?: Program | null;
 }
+
+const DEFAULT_SAMPLE_TL = `println("Hello, World!");`;
+
+const FACTORIAL_SAMPLE_TL = `function factorial(n: number): number {
+  if (n <= 1.0) {
+    return 1.0;
+  }
+  return n * factorial(n - 1.0);
+}
+
+let result = factorial(5.0);
+println(to_string(result));`;
 
 const DEFAULT_SAMPLE_LLVM = `@.str = private unnamed_addr constant [15 x i8] c"Hello, World!\\0A\\00"
 declare i32 @printf(i8*, ...)
@@ -73,17 +93,77 @@ entry:
 export const LLVMStudioModal: React.FC<LLVMStudioModalProps> = ({
   isOpen,
   onClose,
-  initialLLVMCode
+  initialLLVMCode,
+  currentSourceCode,
+  programAST
 }) => {
   const [activeTab, setActiveTab] = useState<'editor' | 'output' | 'wasm' | 'tests'>('editor');
+  const [sourceCode, setSourceCode] = useState<string>(currentSourceCode || DEFAULT_SAMPLE_TL);
   const [llvmCode, setLLVMCode] = useState<string>(initialLLVMCode || DEFAULT_SAMPLE_LLVM);
+  const [studioPipeline, setStudioPipeline] = useState<'legacy' | 'core'>('core');
+  const [studioCoreView, setStudioCoreView] = useState<'llvm' | 'core_ir' | 'source'>('llvm');
   const [executionResult, setExecutionResult] = useState<LLVMExecutionResult | null>(null);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{ title: string; desc: string; isError?: boolean } | null>(null);
 
-  const { compileLLVMToBinary, downloadBinary, isCompiling } = useWasmCompiler();
   const [wasmResult, setWasmResult] = useState<WasmCompilationResult | null>(null);
+  const { compileLLVMToBinary, downloadBinary, isCompiling } = useWasmCompiler();
+
+  useEffect(() => {
+    if (isOpen) {
+      if (currentSourceCode && currentSourceCode.trim().length > 0) {
+        setSourceCode(currentSourceCode);
+      }
+      if (initialLLVMCode && initialLLVMCode.trim().length > 0) {
+        setLLVMCode(initialLLVMCode);
+      }
+    }
+  }, [isOpen, currentSourceCode, initialLLVMCode]);
+
+  const effectiveCoreProg = React.useMemo(() => {
+    const src = sourceCode || currentSourceCode || DEFAULT_SAMPLE_TL;
+    try {
+      const lexer = new Lexer(src);
+      const tokens = lexer.tokenize();
+      const parser = new Parser(tokens);
+      const ast = parser.parseProgram();
+      const lowerer = new CoreLowerer();
+      return lowerer.lower(ast);
+    } catch {
+      return null;
+    }
+  }, [sourceCode, currentSourceCode]);
+
+  const coreIrCode = React.useMemo(() => {
+    if (!effectiveCoreProg) return '// No Core IR available (check syntax or load valid program)';
+    try {
+      return coreToString(effectiveCoreProg);
+    } catch (e: any) {
+      return `// Failed to lower to Core IR: ${e.message}`;
+    }
+  }, [effectiveCoreProg]);
+
+  const coreLlvmCode = React.useMemo(() => {
+    if (!effectiveCoreProg) return llvmCode || '; No Core IR available';
+    try {
+      const codegen = new CoreLLVMCodeGen();
+      return codegen.generate(effectiveCoreProg);
+    } catch (e: any) {
+      return llvmCode || `; Failed to generate Core LLVM: ${e.message}`;
+    }
+  }, [effectiveCoreProg, llvmCode]);
+
+  const displayedCode = React.useMemo(() => {
+    if (studioPipeline === 'legacy') return llvmCode;
+    if (studioCoreView === 'core_ir') return coreIrCode;
+    if (studioCoreView === 'source') return sourceCode;
+    return coreLlvmCode;
+  }, [studioPipeline, studioCoreView, llvmCode, coreIrCode, sourceCode, coreLlvmCode]);
+
+  const codeToExecute = React.useMemo(() => {
+    return studioPipeline === 'core' ? coreLlvmCode : llvmCode;
+  }, [studioPipeline, coreLlvmCode, llvmCode]);
 
   // Test suite state
   const [testSuiteResults, setTestSuiteResults] = useState<{
@@ -94,12 +174,6 @@ export const LLVMStudioModal: React.FC<LLVMStudioModalProps> = ({
     details: { name: string; stage: number; passed: boolean; error?: string }[];
   } | null>(null);
   const [isRunningTests, setIsRunningTests] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (initialLLVMCode && initialLLVMCode.trim().length > 0) {
-      setLLVMCode(initialLLVMCode);
-    }
-  }, [initialLLVMCode]);
 
   // Handle ESC key to dismiss modal
   useEffect(() => {
@@ -118,7 +192,7 @@ export const LLVMStudioModal: React.FC<LLVMStudioModalProps> = ({
     setIsExecuting(true);
     setTimeout(() => {
       const interpreter = new LLVMInterpreter();
-      const res = interpreter.execute(llvmCode);
+      const res = interpreter.execute(codeToExecute);
       setExecutionResult(res);
       setIsExecuting(false);
       setActiveTab('output');
@@ -142,7 +216,7 @@ export const LLVMStudioModal: React.FC<LLVMStudioModalProps> = ({
 
   const handleCompileWasm = async () => {
     try {
-      const res = await compileLLVMToBinary(llvmCode);
+      const res = await compileLLVMToBinary(codeToExecute);
       setWasmResult(res);
       setActiveTab('wasm');
       setToastMessage({
@@ -376,28 +450,137 @@ export const LLVMStudioModal: React.FC<LLVMStudioModalProps> = ({
 
           {/* Quick Presets */}
           {activeTab === 'editor' && (
-            <div className="hidden md:flex items-center space-x-2 text-[11px] pb-1.5">
-              <span className="text-slate-500">Presets:</span>
+            <div className="flex items-center space-x-1.5 text-[11px] pb-1.5 flex-wrap gap-y-1">
+              <span className="text-slate-500 font-semibold mr-1">Presets:</span>
               <button
-                onClick={() => handleResetSample(DEFAULT_SAMPLE_LLVM)}
+                onClick={() => {
+                  if (currentSourceCode) {
+                    setSourceCode(currentSourceCode);
+                  }
+                  if (initialLLVMCode) {
+                    setLLVMCode(initialLLVMCode);
+                  }
+                  setToastMessage({
+                    title: 'Current Editor Code Loaded',
+                    desc: 'Loaded active program from main playground into LLVM Studio'
+                  });
+                  setShowToast(true);
+                  setTimeout(() => setShowToast(false), 2500);
+                }}
+                className="px-2.5 py-0.5 rounded bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-500/50 flex items-center space-x-1 font-bold transition cursor-pointer shadow-sm"
+                title="Load the code currently in the main editor"
+              >
+                <Sparkles className="w-3 h-3 text-purple-300" />
+                <span>Current Editor Program</span>
+              </button>
+              <button
+                onClick={() => {
+                  setSourceCode(DEFAULT_SAMPLE_TL);
+                  setLLVMCode(DEFAULT_SAMPLE_LLVM);
+                  setToastMessage({
+                    title: 'Preset Loaded',
+                    desc: 'Loaded Hello World sample'
+                  });
+                  setShowToast(true);
+                  setTimeout(() => setShowToast(false), 2000);
+                }}
                 className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
               >
                 Hello World
               </button>
               <button
-                onClick={() => handleResetSample(FACTORIAL_SAMPLE_LLVM)}
+                onClick={() => {
+                  setSourceCode(FACTORIAL_SAMPLE_TL);
+                  setLLVMCode(FACTORIAL_SAMPLE_LLVM);
+                  setToastMessage({
+                    title: 'Preset Loaded',
+                    desc: 'Loaded Factorial (SSA) sample'
+                  });
+                  setShowToast(true);
+                  setTimeout(() => setShowToast(false), 2000);
+                }}
                 className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
               >
                 Factorial (SSA)
               </button>
               {initialLLVMCode && (
                 <button
-                  onClick={() => handleResetSample(initialLLVMCode)}
-                  className="px-2 py-0.5 rounded bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-700/50 transition cursor-pointer"
+                  onClick={() => {
+                    setLLVMCode(initialLLVMCode);
+                    setToastMessage({
+                      title: 'Preset Loaded',
+                      desc: 'Loaded Legacy LLVM IR from playground'
+                    });
+                    setShowToast(true);
+                    setTimeout(() => setShowToast(false), 2000);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 transition cursor-pointer"
                 >
-                  TypeLang LLVM
+                  Legacy LLVM
                 </button>
               )}
+            </div>
+          )}
+        </div>
+
+        {/* Pipeline Selector Banner */}
+        <div className="bg-slate-900 px-4 py-2 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2 text-xs">
+          <div className="flex items-center space-x-2">
+            <span className="text-slate-400 font-semibold">Compiler Pipeline:</span>
+            <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+              <button
+                onClick={() => setStudioPipeline('core')}
+                className={`px-3 py-1 rounded-md font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+                  studioPipeline === 'core'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Sparkles className="w-3 h-3 text-purple-300" />
+                <span>Core Pipeline (Haskell Core + llvm-bindings)</span>
+              </button>
+              <button
+                onClick={() => setStudioPipeline('legacy')}
+                className={`px-3 py-1 rounded-md font-bold transition cursor-pointer ${
+                  studioPipeline === 'legacy'
+                    ? 'bg-slate-700 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span>Legacy AST Pipeline</span>
+              </button>
+            </div>
+          </div>
+
+          {studioPipeline === 'core' && (
+            <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+              <button
+                onClick={() => setStudioCoreView('llvm')}
+                className={`px-2.5 py-1 rounded font-medium transition cursor-pointer ${
+                  studioCoreView === 'llvm' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="View generated Core LLVM IR textual code (.ll)"
+              >
+                Core LLVM IR
+              </button>
+              <button
+                onClick={() => setStudioCoreView('core_ir')}
+                className={`px-2.5 py-1 rounded font-medium transition cursor-pointer ${
+                  studioCoreView === 'core_ir' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="View Haskell-style desugared Core Intermediate Representation (.core)"
+              >
+                Core IR Source (.core)
+              </button>
+              <button
+                onClick={() => setStudioCoreView('source')}
+                className={`px-2.5 py-1 rounded font-medium transition cursor-pointer ${
+                  studioCoreView === 'source' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="View and edit TypeLang source code (.tl)"
+              >
+                TypeLang Source (.tl)
+              </button>
             </div>
           )}
         </div>
@@ -411,22 +594,47 @@ export const LLVMStudioModal: React.FC<LLVMStudioModalProps> = ({
               <div className="flex items-center justify-between text-xs text-slate-500 font-mono">
                 <span className="flex items-center space-x-1.5">
                   <FileCode className="w-3.5 h-3.5 text-purple-400" />
-                  <span>main.ll</span>
+                  <span>
+                    {studioPipeline === 'legacy'
+                      ? 'main.legacy.ll'
+                      : studioCoreView === 'core_ir'
+                      ? 'main.core'
+                      : studioCoreView === 'source'
+                      ? 'main.tl'
+                      : 'main.core.ll'}
+                  </span>
+                  {studioPipeline === 'core' && studioCoreView !== 'source' && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                      Read-Only (Generated)
+                    </span>
+                  )}
+                  {((studioPipeline === 'core' && studioCoreView === 'source') || studioPipeline === 'legacy') && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/80 border border-emerald-800/60 text-emerald-300">
+                      Editable
+                    </span>
+                  )}
                 </span>
-                <span>{llvmCode.split('\n').length} lines | UTF-8</span>
+                <span>{displayedCode.split('\n').length} lines | UTF-8</span>
               </div>
               <div className="flex-1 border border-slate-800 rounded-xl overflow-hidden bg-slate-900/60 flex">
                 {/* Line Numbers */}
                 <div className="py-3 px-2 bg-slate-950/80 border-r border-slate-800 text-right select-none font-mono text-[11px] text-slate-600 leading-relaxed min-w-[32px] sm:min-w-[38px]">
-                  {llvmCode.split('\n').map((_, idx) => (
+                  {displayedCode.split('\n').map((_, idx) => (
                     <div key={idx}>{idx + 1}</div>
                   ))}
                 </div>
                 {/* Textarea */}
                 <textarea
-                  value={llvmCode}
-                  onChange={e => setLLVMCode(e.target.value)}
-                  placeholder="Enter LLVM IR textual code here..."
+                  value={displayedCode}
+                  onChange={e => {
+                    if (studioPipeline === 'legacy') {
+                      setLLVMCode(e.target.value);
+                    } else if (studioCoreView === 'source') {
+                      setSourceCode(e.target.value);
+                    }
+                  }}
+                  readOnly={studioPipeline === 'core' && studioCoreView !== 'source'}
+                  placeholder="Enter code here..."
                   className="flex-1 p-2 sm:p-3 bg-transparent font-mono text-xs text-purple-200 resize-none outline-none leading-relaxed overflow-y-auto selection:bg-purple-800 selection:text-white"
                   spellCheck={false}
                 />

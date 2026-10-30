@@ -1,0 +1,1 @@
+let num: number = "not a number";
